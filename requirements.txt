@@ -1,0 +1,8 @@
+pyaudio
+pynput
+keyboard
+pyperclip
+numpy
+torch
+whisperx
+flask
