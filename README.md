@@ -33,6 +33,8 @@ python whisperx-dictate.py --list-devices
 | Enter-to-toggle | `python whisperx-dictate.py -l ru --enter-to-toggle` | Use Enter in terminal instead of global hotkeys |
 | Server (API) | `python whisperx-dictate.py --server -l ru --save-dir ./notes` | Provides `/transcribe`, `/last`, `/save` |
 | Client | `python whisperx-dictate.py --server-url http://127.0.0.1:8765 -l ru` | Keeps local hotkeys, transcribes on remote server |
+| Protected server | `python whisperx-dictate.py --server --api-token mysecret --host 0.0.0.0` | Requires `Authorization: Bearer mysecret` on all endpoints |
+| Client (token) | `python whisperx-dictate.py --server-url http://host:8765 --api-token mysecret` | Sends token automatically with every request |
 
 ## Default Hotkeys
 
@@ -43,6 +45,7 @@ You can customize hotkeys with:
 
 - `-k`, `--key_combination` for dictation toggle
 - `--save-hotkey` for note saving
+- `--save-stop-hotkey` for stop-and-save-to-file (default `Ctrl+Alt+Space`)
 
 ## Key Arguments
 
@@ -60,7 +63,10 @@ You can customize hotkeys with:
 - `--diarize`: enable speaker diarization (`[SPEAKER_XX]` labels)
 - `--diarize-model`: diarization model name (default `pyannote/speaker-diarization-community-1`)
 - `--hf-token`: Hugging Face token for gated diarization models (if needed)
+- `--api-token TOKEN`: bearer token to protect the server or to authenticate against a protected server; also read from `WHISPERX_API_TOKEN` env var
 - `--k_double_cmd`: macOS right-command double-click mode
+
+**API token:** Pass `--api-token` or set `WHISPERX_API_TOKEN` in the environment (preferred for remote deployments so the secret does not appear in `ps` output). The server skips auth only on `GET /health`; all other endpoints return `401` if the token is wrong or missing. The client sends `Authorization: Bearer <token>` automatically.
 
 **Diarization token:** The token is only required when the diarization model is downloaded from the Hub for the first time. You can pass it via `--hf-token`, or set `HF_TOKEN` in the environment, or run `huggingface-cli login` (saves token to `~/.cache/huggingface/token` or `%USERPROFILE%\.cache\huggingface\token`). Once the model is cached locally, it loads from disk and no token is needed.
 
@@ -85,12 +91,20 @@ python whisperx-dictate.py -l ru --enter-to-toggle --save-dir ./notes
 # Larger model
 python whisperx-dictate.py -m large-v3 -l ru
 
-# Server mode
+# Server mode (localhost only, no auth needed)
 python whisperx-dictate.py --server -l ru --save-dir ./notes --host 0.0.0.0 --port 8765
 
-# Client mode
+# Server mode with bearer token (for remote/public exposure)
+python whisperx-dictate.py --server -l ru --save-dir ./notes --host 0.0.0.0 --api-token mysecret
+# or via env var (avoids token in shell history / ps output)
+WHISPERX_API_TOKEN=mysecret python whisperx-dictate.py --server -l ru --save-dir ./notes --host 0.0.0.0
+
+# Client mode (local server, no token)
 python whisperx-dictate.py --server-url http://127.0.0.1:8765 -l ru
-python whisperx-dictate.py --server-url http://192.168.1.10:8765 -l ru
+# Client mode (remote protected server)
+python whisperx-dictate.py --server-url http://192.168.1.10:8765 -l ru --api-token mysecret
+# or via env var
+WHISPERX_API_TOKEN=mysecret python whisperx-dictate.py --server-url http://192.168.1.10:8765 -l ru
 ```
 
 ## HTTP API (Server Mode)
@@ -104,9 +118,14 @@ python whisperx-dictate.py --server-url http://192.168.1.10:8765 -l ru
 - `POST /save` — save last transcription to `--save-dir` on the server
 
 ```bash
+# Without token
 curl -X POST -F "file=@speech.wav" "http://127.0.0.1:8765/transcribe?language=ru"
 curl -X POST --data-binary @recording.raw "http://127.0.0.1:8765/transcribe?language=ru"
 curl -X POST "http://127.0.0.1:8765/save"
+
+# With --api-token mysecret
+curl -X POST -H "Authorization: Bearer mysecret" -F "file=@speech.wav" "http://host:8765/transcribe?language=ru"
+curl -X POST -H "Authorization: Bearer mysecret" "http://host:8765/save"
 ```
 
 ## Startup

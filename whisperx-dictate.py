@@ -64,6 +64,8 @@ class SpeechTranscriber:
         self._diarization_pipeline = None
         self._save_counter = 0
         self._last_text = None
+        self._save_on_next = False  # when True, next transcription goes to file instead of typing
+        self.save_note_hint = None  # if set, printed after each normal transcription
 
     def _next_save_path(self):
         """Return path for next transcript file based on save_naming."""
@@ -149,13 +151,23 @@ class SpeechTranscriber:
         return text if text else None
 
     def transcribe(self, audio_data, language=None):
+        save_mode = self._save_on_next
+        self._save_on_next = False
         text = self.transcribe_to_text(audio_data, language)
         if not text:
             print("(no speech detected)")
             return
         print("→", text)
-        # Save to file only via separate hotkey (--save-hotkey), not automatically
-        # Copy to clipboard so you can paste in Cursor (Ctrl+V)
+        if save_mode and self.save_dir:
+            path = self._next_save_path()
+            if path:
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(text)
+                    print("(saved to {})".format(path))
+                except Exception as e:
+                    print("(save failed:", e, ")")
+            return
         if _HAS_PYPERCLIP:
             try:
                 pyperclip.copy(text)
@@ -164,8 +176,6 @@ class SpeechTranscriber:
                 print("(clipboard copy failed:", e, ")")
         else:
             print("(install pyperclip for clipboard: pip install pyperclip)")
-        # Optionally type into focused window (may fail if focus changed)
-        # Only skip leading spaces, not the first space between words
         started = False
         for element in text:
             if element == " " and not started:
@@ -176,23 +186,32 @@ class SpeechTranscriber:
                 time.sleep(0.0025)
             except Exception:
                 pass
+        if self.save_note_hint:
+            print("(save to note: {})".format(self.save_note_hint))
 
 
 class ClientTranscriber:
     """Transcriber that sends audio to a remote server (same hotkeys/clipboard/typing, no local model)."""
-    def __init__(self, server_url, language=None, diarize=False):
+    def __init__(self, server_url, language=None, diarize=False, api_token=None):
         self.server_url = server_url.rstrip("/")
         self._language = language
         self._diarize = diarize
+        self._api_token = api_token
         self.pykeyboard = keyboard.Controller()
         self.save_dir = None  # save is done on server via POST /save
         self._last_text = None
+        self._save_on_next = False
+        self.save_note_hint = None
         try:
             import urllib.request
             with urllib.request.urlopen(self.server_url + "/health", timeout=5) as _:
                 pass
         except Exception as e:
             print("(warning: server not reachable at", self.server_url, "—", e, ")")
+
+    def _add_auth(self, req):
+        if self._api_token:
+            req.add_header("Authorization", "Bearer " + self._api_token)
 
     def _post_transcribe(self, audio_bytes, language=None):
         import urllib.request
@@ -206,6 +225,7 @@ class ClientTranscriber:
         url = self.server_url + "/transcribe" + (("?" + "&".join(params)) if params else "")
         req = urllib.request.Request(url, data=audio_bytes, method="POST")
         req.add_header("Content-Type", "application/octet-stream")
+        self._add_auth(req)
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 return json.loads(resp.read().decode("utf-8"))
@@ -217,6 +237,7 @@ class ClientTranscriber:
         import urllib.request
         import json
         req = urllib.request.Request(self.server_url + "/save", data=b"", method="POST")
+        self._add_auth(req)
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode("utf-8"))
@@ -235,6 +256,8 @@ class ClientTranscriber:
             print("(save error:", out["error"], ")")
 
     def transcribe(self, audio_data, language=None):
+        save_mode = self._save_on_next
+        self._save_on_next = False
         # s16le 16 kHz mono for server
         if audio_data.dtype != np.int16:
             audio_bytes = (audio_data * 32768.0).astype(np.int16).tobytes()
@@ -249,6 +272,13 @@ class ClientTranscriber:
             return
         self._last_text = text
         print("→", text)
+        if save_mode:
+            out2 = self._post_save()
+            if out2 and out2.get("saved"):
+                print("(saved on server to {})".format(out2.get("path", "?")))
+            elif out2 and out2.get("error"):
+                print("(save error:", out2["error"], ")")
+            return
         if _HAS_PYPERCLIP:
             try:
                 pyperclip.copy(text)
@@ -267,6 +297,8 @@ class ClientTranscriber:
                 time.sleep(0.0025)
             except Exception:
                 pass
+        if self.save_note_hint:
+            print("(save to note: {})".format(self.save_note_hint))
 
 
 class Recorder:
@@ -527,6 +559,15 @@ class CLIApp:
         while True:
             time.sleep(1)  # Keep main thread alive
 
+    def stop_and_save(self):
+        """Stop current recording and save the transcription to file (skip typing)."""
+        if not self.started:
+            return
+        print("Stopping (save to file)...")
+        self.recorder.transcriber._save_on_next = True
+        self.recorder.stop()
+        self.started = False
+
     def save_last_note(self):
         """Save last transcription to file (called by save hotkey)."""
         self.recorder.transcriber.save_last_to_note()
@@ -558,6 +599,15 @@ class CLIAppEnter:
                 self.toggle()
             except (EOFError, KeyboardInterrupt):
                 break
+
+    def stop_and_save(self):
+        """Stop current recording and save the transcription to file (skip typing)."""
+        if not self.started:
+            return
+        print("Stopping (save to file)...")
+        self.recorder.transcriber._save_on_next = True
+        self.recorder.stop()
+        self.started = False
 
     def save_last_note(self):
         """Save last transcription to file (called by save hotkey)."""
@@ -620,6 +670,16 @@ def _run_server(transcriber, args):
     app = Flask(__name__)
     _transcriber = transcriber
     _lang = args.language[0] if getattr(args, "language", None) else None
+    _api_token = getattr(args, "api_token", None)
+
+    if _api_token:
+        @app.before_request
+        def _check_auth():
+            if request.endpoint == "health":
+                return None
+            auth = request.headers.get("Authorization", "")
+            if not (auth.startswith("Bearer ") and auth[7:] == _api_token):
+                return jsonify({"error": "unauthorized"}), 401
 
     @app.route("/health")
     def health():
@@ -679,6 +739,10 @@ def _run_server(transcriber, args):
     host = getattr(args, "host", "127.0.0.1")
     port = getattr(args, "port", 8765)
     print("Server: http://{}:{}/  (GET /health, /last; POST /transcribe, /save)".format(host, port))
+    if _api_token:
+        print("Auth: Bearer token required on all endpoints except /health.")
+    elif host != "127.0.0.1":
+        print("WARNING: server is exposed without --api-token. Anyone who can reach this address can transcribe audio.")
     app.run(host=host, port=port, threaded=True, use_reloader=False)
 
 
@@ -716,7 +780,9 @@ def parse_args():
     parser.add_argument('--save-naming', type=str, choices=['number', 'time'], default='number',
                         help='When using --save-dir: "number" (transcript_001.txt, ...) or "time" (transcript_2026-03-13_14-30-45.txt). Default: number.')
     parser.add_argument('--save-hotkey', type=str, default='ctrl+alt+n', metavar='KEYS',
-                        help='Hotkey to save last transcription to a note in --save-dir. Default: ctrl+alt+n (Ctrl+N is often "New" in Windows apps).')
+                        help='Hotkey to save the last (already finished) transcription to a note in --save-dir. Default: ctrl+alt+n.')
+    parser.add_argument('--save-stop-hotkey', type=str, default='ctrl+alt+space', metavar='KEYS',
+                        help='Hotkey that stops the current recording and saves the result directly to a file in --save-dir, without typing into the focused window. Default: ctrl+alt+space.')
     parser.add_argument('--server', action='store_true',
                         help='Run as HTTP API server instead of desktop app (transcribe, last, save).')
     parser.add_argument('--host', type=str, default='127.0.0.1',
@@ -735,8 +801,15 @@ def parse_args():
                         help='Diarization model name for WhisperX pyannote pipeline.')
     parser.add_argument('--hf-token', type=str, default=None,
                         help='Hugging Face token for gated diarization models, if required.')
+    parser.add_argument('--api-token', type=str, default=None, metavar='TOKEN',
+                        help='Secret bearer token to protect the HTTP API (server mode) or authenticate against a protected server (client mode). '
+                        'Can also be set via the WHISPERX_API_TOKEN environment variable. '
+                        'When set on the server, all endpoints except /health require "Authorization: Bearer <token>".')
 
     args = parser.parse_args()
+
+    if not args.api_token:
+        args.api_token = os.environ.get("WHISPERX_API_TOKEN") or None
 
     if args.language is not None:
         args.language = args.language.split(',')
@@ -767,6 +840,7 @@ if __name__ == "__main__":
             server_url,
             language=lang,
             diarize=getattr(args, "diarize", False),
+            api_token=getattr(args, "api_token", None),
         )
     else:
         import torch
@@ -805,7 +879,10 @@ if __name__ == "__main__":
                 import keyboard as kb
                 save_hk = getattr(args, "save_hotkey", "ctrl+alt+n").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
                 kb.add_hotkey(save_hk, app.save_last_note, suppress=False)
-                print("Save last dictation to note: {}".format(save_hk))
+                transcriber.save_note_hint = save_hk
+                save_stop_hk = getattr(args, "save_stop_hotkey", "ctrl+alt+space").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
+                kb.add_hotkey(save_stop_hk, app.stop_and_save, suppress=False)
+                print("Stop recording + save to file: {}".format(save_stop_hk))
             except Exception:
                 pass
         app.run()
@@ -825,6 +902,9 @@ if __name__ == "__main__":
                 if getattr(args, "save_dir", None) or getattr(args, "server_url", None):
                     save_hk = getattr(args, "save_hotkey", "ctrl+alt+n").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
                     kb.add_hotkey(save_hk, app.save_last_note, suppress=False)
+                    transcriber.save_note_hint = save_hk
+                    save_stop_hk = getattr(args, "save_stop_hotkey", "ctrl+alt+space").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
+                    kb.add_hotkey(save_stop_hk, app.stop_and_save, suppress=False)
                 use_keyboard_lib = True
                 key_combo = hotkey_str  # show user the actual combo
             except ImportError:
@@ -835,8 +915,8 @@ if __name__ == "__main__":
         if use_keyboard_lib:
             print("Running... (hotkey: {} — press Ctrl+C to quit)".format(key_combo))
             if getattr(args, "save_dir", None) or getattr(args, "server_url", None):
-                save_hk = getattr(args, "save_hotkey", "ctrl+alt+n").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
-                print("Save last dictation to note: {}".format(save_hk))
+                save_stop_hk = getattr(args, "save_stop_hotkey", "ctrl+alt+space").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
+                print("Stop recording + save to file: {}".format(save_stop_hk))
             print("If hotkey does not work, run this terminal as Administrator or use --enter-to-toggle.")
             try:
                 while True:
@@ -851,5 +931,15 @@ if __name__ == "__main__":
             listener = keyboard.Listener(on_press=key_listener.on_key_press, on_release=key_listener.on_key_release)
             listener.start()
             print("Running... (hotkey: {})".format(key_combo))
+            if getattr(args, "save_dir", None) or getattr(args, "server_url", None):
+                save_stop_combo = getattr(args, "save_stop_hotkey", "ctrl+alt+space")
+                save_stop_listener_obj = GlobalKeyListener(app, save_stop_combo)
+                save_stop_listener_obj.app = type("_ShimApp", (), {"toggle": app.stop_and_save})()
+                save_stop_listener = keyboard.Listener(
+                    on_press=save_stop_listener_obj.on_key_press,
+                    on_release=save_stop_listener_obj.on_key_release,
+                )
+                save_stop_listener.start()
+                print("Stop recording + save to file: {}".format(save_stop_combo))
             app.run()
 
