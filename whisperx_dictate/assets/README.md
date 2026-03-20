@@ -27,8 +27,9 @@ try:
 except AttributeError:
     resample = Image.LANCZOS
 base = img.resize((256, 256), resample)
-sizes = [(16, 16), (20, 20), (24, 24), (32, 32), (40, 40), (48, 48),
-         (64, 64), (72, 72), (96, 96), (128, 128), (256, 256)]
+# Put largest sizes first so tools that only read the first ICO frame stay sharp.
+sizes = [(256, 256), (128, 128), (96, 96), (72, 72), (64, 64), (48, 48), (40, 40),
+         (32, 32), (24, 24), (20, 20), (16, 16)]
 base.save(assets / "app.ico", format="ICO", sizes=sizes)
 ```
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""GUI entry: adds project root to sys.path so `python whisperx-dictate-gui.py` works without install."""
+"""Same as whisperx-dictate-gui.py; from Explorer this file is usually opened with pythonw (no console). Use --console if you need a console."""
 
 import sys
 from pathlib import Path

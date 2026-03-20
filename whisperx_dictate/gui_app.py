@@ -13,6 +13,7 @@ from whisperx_dictate.devices import list_input_devices
 from whisperx_dictate.runtime import build_recorder, build_transcriber, prepare_glossary_and_prompt
 from whisperx_dictate.server import run_server_in_thread
 from whisperx_dictate import app_icon, tray_support
+from whisperx_dictate.win_gui_console import apply_gui_console_preference
 
 
 def gui_config_path():
@@ -187,6 +188,8 @@ def _build_args_from_form(values):
 
 
 def gui_main():
+    apply_gui_console_preference()
+    app_icon.prepare_windows_taskbar_identity()
     root = tk.Tk()
     root.title("WhisperX Dictate")
     root.minsize(640, 520)

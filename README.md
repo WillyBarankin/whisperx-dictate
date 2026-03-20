@@ -33,6 +33,7 @@ Application code lives in the `whisperx_dictate/` package. Thin launchers in the
 
 - `whisperx-dictate.py` → CLI (`cli_main`)
 - `whisperx-dictate-gui.py` → desktop GUI (`gui_main`)
+- `whisperx-dictate-gui.pyw` → same GUI, **Windows**: `pythonw` by default (no console; use `--console` if needed)
 
 ## Desktop GUI (tkinter)
 
@@ -42,9 +43,11 @@ Native window (no browser). From the project directory:
 python whisperx-dictate-gui.py
 ```
 
-Equivalent: `python -m whisperx_dictate.gui_app`
+On **Windows**, **`python.exe whisperx-dictate-gui.py`** uses a normal console. **`pythonw`** / **`.pyw`** has no console by default; use **`--console`** or **`WHISPERX_DICTATE_GUI_CONSOLE=1`** to allocate one for logging or debugging.
 
-**Window / tray icon:** add your own `app.ico` and/or `app.png` under `whisperx_dictate/assets/` (see `whisperx_dictate/assets/README.md`). Windows benefits from a multi-size `.ico` for the taskbar; the tray uses the PNG if present (else `.ico` via Pillow), otherwise the built-in placeholder.
+Equivalent: `python -m whisperx_dictate.gui_app` (same rules when `gui_main` runs)
+
+**Window / tray icon:** add your own `app.ico` and/or `app.png` under `whisperx_dictate/assets/` (see `whisperx_dictate/assets/README.md`). Windows benefits from a multi-size `.ico` for the taskbar; the tray uses the PNG if present (else `.ico` via Pillow), otherwise the built-in placeholder. On Windows the GUI also sets an **AppUserModelID** before creating the window and applies **`WM_SETICON` via Win32** (in addition to Tk) so the **taskbar** can use a **large** layer from `app.ico` instead of a blurry scaled‑up 16×16.
 
 Configure language, model, optional remote server URL, glossary / initial-prompt files, save directory, and multi-select audio devices. Click **Load model / connect** (runs in a background thread so the window stays responsive). Optionally enable **Expose local HTTP API** to serve the same JSON endpoints as `--server` on the chosen host/port (default `127.0.0.1:8765`) in a background thread.
 
