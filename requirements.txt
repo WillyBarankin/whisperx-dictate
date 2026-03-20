@@ -6,3 +6,5 @@ numpy
 torch
 whisperx
 flask
+pystray
+Pillow

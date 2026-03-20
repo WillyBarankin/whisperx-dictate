@@ -44,6 +44,8 @@ python whisperx-dictate-gui.py
 
 Equivalent: `python -m whisperx_dictate.gui_app`
 
+**Window / tray icon:** add your own `app.ico` and/or `app.png` under `whisperx_dictate/assets/` (see `whisperx_dictate/assets/README.md`). Windows benefits from a multi-size `.ico` for the taskbar; the tray uses the PNG if present (else `.ico` via Pillow), otherwise the built-in placeholder.
+
 Configure language, model, optional remote server URL, glossary / initial-prompt files, save directory, and multi-select audio devices. Click **Load model / connect** (runs in a background thread so the window stays responsive). Optionally enable **Expose local HTTP API** to serve the same JSON endpoints as `--server` on the chosen host/port (default `127.0.0.1:8765`) in a background thread.
 
 **Settings profile:** `gui_config.json` is stored under `%APPDATA%\WhisperXDictate\` on Windows, or `~/.config/whisperx-dictate/` on other platforms. The GUI saves on each successful **Load model / connect**.
@@ -51,6 +53,8 @@ Configure language, model, optional remote server URL, glossary / initial-prompt
 The GUI has a **Translate speech to English** checkbox (Whisper `translate` task); leave it off to **transcribe** in the spoken language. Click **Load model / connect** after changing it.
 
 By default the GUI matches the CLI after each dictation: **type into the focused window** and **copy to the clipboard** (disable either via the two checkboxes). Use **Start recording** / **Stop recording**, or enable **global hotkeys** (same `keyboard` library as the CLI; on Windows you may need to run the app as Administrator). Defaults: dictate `ctrl+space`, save last `ctrl+alt+n`, stop recording and save to file `ctrl+alt+space` — configurable in the form and stored in `gui_config.json`. For **multiple audio devices**, use **Ctrl/Shift-click** in the device list (extended selection); each source is captured in parallel so all are mixed for transcription.
+
+**System tray (notification area):** with **Minimize to system tray** enabled (default), minimizing the window hides it from the taskbar and shows an icon near the clock; **Open** (double-click the icon on some setups) or the tray menu restores the window, **Exit** quits the app. Use **Hide to tray** to hide without using the taskbar minimize button. Requires `pystray` and `Pillow` (listed in `requirements.txt`). Closing the window with the title-bar **X** still exits fully (tray icon is removed).
 
 **Copy last to clipboard** uses the last transcript; **Save last to note** uses save-directory semantics when set (local mode only for file saves; client mode still uses the server’s `/save`).
 

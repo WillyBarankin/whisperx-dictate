@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, ttk
 from whisperx_dictate.devices import list_input_devices
 from whisperx_dictate.runtime import build_recorder, build_transcriber, prepare_glossary_and_prompt
 from whisperx_dictate.server import run_server_in_thread
+from whisperx_dictate import app_icon, tray_support
 
 
 def gui_config_path():
@@ -53,6 +54,7 @@ DEFAULT_CONFIG = {
     "inject_typing": True,
     "copy_to_clipboard": True,
     "translate": False,
+    "minimize_to_tray": True,
 }
 
 
@@ -105,7 +107,7 @@ def _collect_form_values(
     save_naming_var, hf_var, max_t_var, diarize_var, no_gloss_prompt_var,
     expose_api_var, host_var, port_var, devices_listbox,
     enable_hotkeys_var, dict_hotkey_var, save_hotkey_var, save_stop_hotkey_var,
-    inject_typing_var, copy_clipboard_var,
+    inject_typing_var, copy_clipboard_var, minimize_to_tray_var,
 ):
     sel = [devices_listbox.get(i) for i in devices_listbox.curselection()]
     indices = []
@@ -140,6 +142,7 @@ def _collect_form_values(
         "save_stop_hotkey": save_stop_hotkey_var.get(),
         "inject_typing": inject_typing_var.get(),
         "copy_to_clipboard": copy_clipboard_var.get(),
+        "minimize_to_tray": minimize_to_tray_var.get(),
     }
 
 
@@ -187,6 +190,7 @@ def gui_main():
     root = tk.Tk()
     root.title("WhisperX Dictate")
     root.minsize(640, 520)
+    app_icon.apply_tk_window_icon(root)
 
     msg_queue = queue.Queue()
     state = {
@@ -195,6 +199,7 @@ def gui_main():
         "started": False,
         "api_started": False,
         "hotkey_hooks": [],
+        "tray_icon": None,
     }
 
     cfg = load_gui_config()
@@ -346,6 +351,16 @@ def gui_main():
     ).pack(side=tk.LEFT)
 
     row += 1
+    minimize_to_tray_var = tk.BooleanVar(value=cfg.get("minimize_to_tray", True))
+    tray_row = ttk.Frame(main)
+    tray_row.grid(row=row, column=0, columnspan=3, sticky="w")
+    ttk.Checkbutton(
+        tray_row,
+        text="Minimize to system tray (notification area)",
+        variable=minimize_to_tray_var,
+    ).pack(side=tk.LEFT, padx=(0, 8))
+
+    row += 1
     ttk.Label(main, text="Audio devices (Ctrl/Shift-click multi-select; empty = default):").grid(row=row, column=0, sticky="nw")
     dev_frame = ttk.Frame(main)
     dev_frame.grid(row=row, column=1, columnspan=2, sticky="nsew")
@@ -456,7 +471,7 @@ def gui_main():
                 save_naming_var, hf_var, max_t_var, diarize_var, no_gloss_prompt_var,
                 expose_api_var, host_var, port_var, devices_listbox,
                 enable_hotkeys_var, dict_hotkey_var, save_hotkey_var, save_stop_hotkey_var,
-                inject_typing_var, copy_clipboard_var,
+                inject_typing_var, copy_clipboard_var, minimize_to_tray_var,
             )
             args_obj = _build_args_from_form(vals)
         except (ValueError, TypeError) as e:
@@ -615,16 +630,102 @@ def gui_main():
         except Exception as e:
             messagebox.showerror("Save", str(e))
 
+    hiding_to_tray = [False]
+
+    def show_main_window():
+        root.deiconify()
+        root.state("normal")
+        root.lift()
+        try:
+            root.focus_force()
+        except tk.TclError:
+            pass
+
+    def stop_tray_icon():
+        icon = state.get("tray_icon")
+        if not icon:
+            return
+        try:
+            icon.stop()
+        except Exception:
+            pass
+        state["tray_icon"] = None
+
+    def on_close():
+        unregister_gui_hotkeys()
+        stop_tray_icon()
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass
+
+    def ensure_tray():
+        if not tray_support.tray_available():
+            return
+        if state.get("tray_icon"):
+            return
+
+        def on_open():
+            root.after(0, show_main_window)
+
+        def on_quit():
+            root.after(0, on_close)
+
+        state["tray_icon"] = tray_support.create_tray_icon(
+            "WhisperX Dictate",
+            on_open,
+            on_quit,
+        )
+
+    def handle_unmap(event):
+        if event.widget != root or hiding_to_tray[0]:
+            return
+        if not minimize_to_tray_var.get():
+            return
+        if not tray_support.tray_available():
+            return
+        root.after(200, check_iconic_and_hide)
+
+    def check_iconic_and_hide():
+        try:
+            if not root.winfo_exists():
+                return
+            if root.state() != "iconic":
+                return
+            if not minimize_to_tray_var.get():
+                return
+        except tk.TclError:
+            return
+        ensure_tray()
+        hiding_to_tray[0] = True
+        root.withdraw()
+        root.after(0, _end_hide_to_tray)
+
+    def _end_hide_to_tray():
+        hiding_to_tray[0] = False
+
+    def hide_to_tray_manual():
+        if not tray_support.tray_available():
+            messagebox.showinfo(
+                "System tray",
+                "Optional: pip install pystray pillow",
+            )
+            return
+        ensure_tray()
+        hiding_to_tray[0] = True
+        root.withdraw()
+        root.after(0, _end_hide_to_tray)
+
+    ttk.Button(tray_row, text="Hide to tray", command=hide_to_tray_manual).pack(side=tk.LEFT)
+
+    root.bind("<Unmap>", handle_unmap)
+
     load_btn = ttk.Button(btn_frame, text="Load model / connect", command=do_load)
     load_btn.pack(side=tk.LEFT, padx=4)
     rec_btn = ttk.Button(btn_frame, text="Start recording", command=toggle_record, state=tk.DISABLED)
     rec_btn.pack(side=tk.LEFT, padx=4)
     ttk.Button(btn_frame, text="Copy last to clipboard", command=copy_clipboard).pack(side=tk.LEFT, padx=4)
     ttk.Button(btn_frame, text="Save last to note", command=save_note).pack(side=tk.LEFT, padx=4)
-
-    def on_close():
-        unregister_gui_hotkeys()
-        root.destroy()
 
     root.protocol("WM_DELETE_WINDOW", on_close)
 
