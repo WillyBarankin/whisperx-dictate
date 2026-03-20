@@ -50,39 +50,41 @@ You can customize hotkeys with:
 ## Key Arguments
 
 - `-l`, `--language`: language code (`ru`, `en`, etc.)
-- `-m`, `--model_name`: `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3`
+- `-m`, `--model_name`: `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3` (also `.en` variants: `tiny.en`, `base.en`, `small.en`, `medium.en`)
 - `--enter-to-toggle`: use Enter in terminal to start/stop recording
+- `-t`, `--max_time`: optional cap on recording length in seconds; **default: no limit** (stop only via hotkey / Enter). If set, recording stops automatically when the duration elapses
 - `--save-dir DIR`: directory for saved notes
 - `--save-naming number|time`: file naming strategy
 - `--save-hotkey KEYS`: save hotkey (default `ctrl+alt+n`)
+- `--save-stop-hotkey KEYS`: stop recording + save to file, skipping typing (default `ctrl+alt+space`)
 - `--server`: run HTTP server mode
 - `--host`, `--port`: server bind address and port
 - `--server-url URL`: use remote server for transcription (client mode)
-- `--input-devices IDS`: optional comma-separated device indices to record and mix (inputs and/or output loopback), for example `13,36`
+- `--input-devices IDS`: comma-separated device indices to record and mix (inputs and/or output loopback), for example `13,36`
 - `--list-devices`: print available device indices and exit
 - `--diarize`: enable speaker diarization (`[SPEAKER_XX]` labels)
 - `--diarize-model`: diarization model name (default `pyannote/speaker-diarization-community-1`)
 - `--hf-token`: Hugging Face token for gated diarization models (if needed)
-- `--initial-prompt TEXT`: optional [Whisper `initial_prompt`](https://github.com/SYSTRAN/faster-whisper) via WhisperX `asr_options`. Sets **context** for decoding (topic, situation, language/register mix)—see **Steering recognition** below. **Not** a replacement for the glossary when you need exact spellings. Keep it short. Mutually exclusive with `--initial-prompt-file`.
-- `--initial-prompt-file PATH`: same, but read from a UTF-8 file (multi-line context). See **Initial prompt example** below.
-- `--glossary-file PATH`: UTF-8 **TSV** table: column 1 = what the model often prints, column 2 = what you want. Rows are applied as **substring replacements** after each transcript (longer phrases first). If you do **not** use `--initial-prompt` / `--initial-prompt-file`, a **short** `initial_prompt` is auto-built from unique values in column 2 (capped in length) so the context does not turn into a long essay.
-- `--no-glossary-prompt`: use with `--glossary-file` to **only** run replacements and **not** feed column 2 into `initial_prompt` (useful for very large glossaries).
-- `--api-token TOKEN`: bearer token to protect the server or to authenticate against a protected server; also read from `WHISPERX_API_TOKEN` env var
+- `--initial-prompt TEXT`: Whisper [`initial_prompt`](https://github.com/SYSTRAN/faster-whisper) via WhisperX `asr_options`. Sets **context** for decoding (topic, register, language mix) — see **Steering recognition** below. Mutually exclusive with `--initial-prompt-file`.
+- `--initial-prompt-file PATH`: same, but read from a UTF-8 file. See **Initial prompt example** below.
+- `--glossary-file PATH`: UTF-8 table (tab or two-or-more spaces between columns). Column 1 = what the model prints, column 2 = what you want. Applied as **substring replacements** after each transcript, longest first. Without an explicit `--initial-prompt`, a short bias string is auto-built from column 2.
+- `--no-glossary-prompt`: with `--glossary-file`, skip auto-building `initial_prompt` from column 2 (replacements only).
+- `--api-token TOKEN`: bearer token for server auth; also read from `WHISPERX_API_TOKEN` env var
 - `--k_double_cmd`: macOS right-command double-click mode
 
 **API token:** Pass `--api-token` or set `WHISPERX_API_TOKEN` in the environment (preferred for remote deployments so the secret does not appear in `ps` output). The server skips auth only on `GET /health`; all other endpoints return `401` if the token is wrong or missing. The client sends `Authorization: Bearer <token>` automatically.
 
-**Diarization token:** The token is only required when the diarization model is downloaded from the Hub for the first time. You can pass it via `--hf-token`, or set `HF_TOKEN` in the environment, or run `huggingface-cli login` (saves token to `~/.cache/huggingface/token` or `%USERPROFILE%\.cache\huggingface\token`). Once the model is cached locally, it loads from disk and no token is needed.
+**Diarization token:** Only required when the model is downloaded from the Hub for the first time. Pass via `--hf-token`, or set `HF_TOKEN` in the environment, or run `huggingface-cli login`. Once cached locally, no token is needed.
 
 **Steering recognition — `initial_prompt` vs `--glossary-file`:**
 
 | | **`initial_prompt`** | **`--glossary-file`** |
-|---|----------------------|-------------------------|
-| **Purpose** | Bias *what kind of text* you expect: setting, topic, technical vs casual, mixed RU/EN, domain jargon in prose. | **After** transcription: replace wrong *substrings* with the right text (brands, repeated ASR errors). |
-| **Think of it as** | “This is a standup / lecture / ticket notes…” so token choices fit the scenario. | A deterministic find/replace table. |
-| **Spellings** | Soft hint only; not guaranteed. | Exact output for each row you define. |
+|---|---|---|
+| **Purpose** | Bias *what kind of text* you expect: topic, register, mixed RU/EN, domain jargon. | Replace wrong substrings with exact text after transcription. |
+| **Think of it as** | "This is a standup / lecture / ticket notes…" | A deterministic find/replace table. |
+| **Spellings** | Soft hint; not guaranteed. | Exact output for each row. |
 
-Use **both** together when useful: prompt for overall context, glossary for corrections you can list. For systematic typo fixes, prefer the glossary; use the prompt for everything that is not a simple string substitution.
+Use both together when useful: prompt for overall context, glossary for corrections you can list.
 
 ## Examples
 
@@ -90,7 +92,7 @@ Use **both** together when useful: prompt for overall context, glossary for corr
 # Local dictation with note saving
 python whisperx-dictate.py -l ru --save-dir ./notes
 
-# Mix two input devices (for example mic + headset monitor)
+# Mix two input devices (mic + headset monitor)
 python whisperx-dictate.py -l ru --input-devices 1,3
 
 # Mix your mic and system audio
@@ -105,23 +107,21 @@ python whisperx-dictate.py -l ru --enter-to-toggle --save-dir ./notes
 # Larger model
 python whisperx-dictate.py -m large-v3 -l ru
 
-# TSV glossary: wrong → correct (see "Glossary" below)
+# Glossary: wrong → correct (see "Glossary" below)
 python whisperx-dictate.py -l ru --glossary-file examples/glossary.sample.tsv
 
-# Server mode (localhost only, no auth needed)
+# Server mode
 python whisperx-dictate.py --server -l ru --save-dir ./notes --host 0.0.0.0 --port 8765
 
-# Server mode with bearer token (for remote/public exposure)
+# Server with bearer token
 python whisperx-dictate.py --server -l ru --save-dir ./notes --host 0.0.0.0 --api-token mysecret
-# or via env var (avoids token in shell history / ps output)
+# or via env var
 WHISPERX_API_TOKEN=mysecret python whisperx-dictate.py --server -l ru --save-dir ./notes --host 0.0.0.0
 
-# Client mode (local server, no token)
+# Client mode
 python whisperx-dictate.py --server-url http://127.0.0.1:8765 -l ru
-# Client mode (remote protected server)
+# Client with token
 python whisperx-dictate.py --server-url http://192.168.1.10:8765 -l ru --api-token mysecret
-# or via env var
-WHISPERX_API_TOKEN=mysecret python whisperx-dictate.py --server-url http://192.168.1.10:8765 -l ru
 ```
 
 ## HTTP API (Server Mode)
@@ -131,7 +131,7 @@ WHISPERX_API_TOKEN=mysecret python whisperx-dictate.py --server-url http://192.1
 - `POST /transcribe` — transcribe audio
   - raw body: s16le PCM, 16 kHz mono
   - or multipart form file: `file`/`audio` (for example WAV)
-  - optional query: `?language=ru`
+  - optional query: `?language=ru`, `?diarize=1`
 - `POST /save` — save last transcription to `--save-dir` on the server
 
 ```bash
@@ -140,7 +140,7 @@ curl -X POST -F "file=@speech.wav" "http://127.0.0.1:8765/transcribe?language=ru
 curl -X POST --data-binary @recording.raw "http://127.0.0.1:8765/transcribe?language=ru"
 curl -X POST "http://127.0.0.1:8765/save"
 
-# With --api-token mysecret
+# With token
 curl -X POST -H "Authorization: Bearer mysecret" -F "file=@speech.wav" "http://host:8765/transcribe?language=ru"
 curl -X POST -H "Authorization: Bearer mysecret" "http://host:8765/save"
 ```
@@ -156,7 +156,7 @@ curl -X POST -H "Authorization: Bearer mysecret" "http://host:8765/save"
 
 ## Initial prompt example
 
-[`initial_prompt`](https://github.com/SYSTRAN/faster-whisper) is conditioning text read **before** your audio: the decoder favors words and phrasing that *fit* that scenario. Below is a **context** example (engineering standup), not a spelling checklist—for “always write X as Y” use the **glossary** instead.
+[`initial_prompt`](https://github.com/SYSTRAN/faster-whisper) is conditioning text the decoder reads **before** your audio, biasing it toward words and phrasing that fit the scenario. This is a **context** hint, not a spelling dictionary — for exact string fixes use the **glossary**.
 
 **File** [`examples/initial_prompt.sample.txt`](examples/initial_prompt.sample.txt):
 
@@ -164,40 +164,39 @@ curl -X POST -H "Authorization: Bearer mysecret" "http://host:8765/save"
 Software engineering standup in English. Informal but technical: pull requests, issues, CI pipelines, APIs, deployment, repositories, code review.
 ```
 
-**One-line CLI** (escape quotes on your shell if needed):
+**CLI:**
 
 ```bash
 python whisperx-dictate.py -l en --initial-prompt "Engineering standup: GitHub, CI, APIs, deployment, informal technical English."
-```
-
-**With file:**
-
-```bash
+# or from file
 python whisperx-dictate.py -l en --initial-prompt-file examples/initial_prompt.sample.txt
 ```
 
-Other ideas for `initial_prompt`: lecture notes in Russian with English IT terms; medical or legal dictation; customer call summary in a given industry vocabulary—still **short** (a few sentences).
+Other ideas: lecture notes in Russian with English IT terms; medical or legal dictation; customer call summary — keep it **short** (a few sentences).
 
-Server mode loads the model once: pass the same flags when starting the server so `initial_prompt` applies to every request. Client-only mode does not load the model; configure the prompt on the machine that runs `--server`.
+Server mode loads the model once, so pass the prompt flags when starting the server. Client mode does not load the model; configure the prompt on the server side.
 
 ## Glossary (table wrong → correct)
 
-This is the right tool for **deterministic** corrections (exact substrings). It complements an `initial_prompt` that only describes *context*; see **Steering recognition** above.
+Deterministic corrections (exact substrings) applied after each transcription. Complements `initial_prompt`, which only sets *context* — see **Steering recognition** above.
 
-Edit a **tab-separated** file (UTF-8). One row per mishearing:
+Edit a UTF-8 file with one row per mishearing. Between the two columns use a **tab** or **two-or-more spaces** (single spaces inside a phrase stay part of column 1).
 
-- **Column 1:** substring as Whisper printed it (include each common variant: different casing, Russian transcript of an English name, etc.).
-- **Column 2:** exact text you want in the final transcript.
-- Lines starting with `#` are comments. Optional header row `wrong<TAB>correct` (or `from` / `to`) is ignored.
-- Replacements run **longest match first**, so a row `wabbits` → `rabbits` is applied before a shorter row `wabbit` → `rabbit` if you add both.
+- **Column 1:** text as Whisper printed it (add variants: different casing, Russian phonetic transcription of an English name, etc.).
+- **Column 2:** exact text you want in the final output.
+- Lines starting with `#` are comments. An optional header row (`wrong`/`correct` or `from`/`to`) is auto-skipped.
+- Longer left-column strings are replaced first.
 
 Example: [`examples/glossary.sample.tsv`](examples/glossary.sample.tsv).
 
 ```text
 wrong	correct
 wabbit	rabbit
+the wabbit    the rabbit
 ```
 
-This is the main way to grow a “dictionary” without bloating `initial_prompt`: add rows as you notice errors. Use `--no-glossary-prompt` if you only want deterministic fixes and rely on `-l`, model size, or a small `--initial-prompt` for ASR bias.
+The last data row uses multiple spaces as the separator instead of a tab.
 
-**Client + server:** Replacements run on the client too if you pass `--glossary-file` on the client (useful if the server was started without the glossary). For `initial_prompt` derived from the glossary, start the **server** with the same `--glossary-file` (or an explicit `--initial-prompt`).
+Add rows as you notice errors — this is the main way to grow a correction dictionary. Use `--no-glossary-prompt` if you only want replacements without auto-building an `initial_prompt` from column 2.
+
+**Client + server:** the glossary runs on whichever side you pass `--glossary-file`. For the auto-built `initial_prompt` to affect decoding, pass it on the **server** (or use an explicit `--initial-prompt` there).

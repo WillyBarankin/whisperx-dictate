@@ -45,13 +45,17 @@ def _is_modifier_key(key, modifier_name):
 
 
 _GLOSSARY_HEADER_RE = re.compile(
-    r"^(?P<a>from|wrong|misheard|source)\t(?P<b>to|correct|right|target)\s*$",
+    r"^(?P<a>from|wrong|misheard|source)(?:\t|\s{2,})(?P<b>to|correct|right|target)\s*$",
     re.IGNORECASE,
 )
 
 
 def load_glossary_tsv(path):
-    """Load UTF-8 TSV: column 1 = text the model may emit, column 2 = replacement. # starts a comment line."""
+    """Load UTF-8 glossary: column 1 = text the model may emit, column 2 = replacement.
+
+    Separator: tab, or two-or-more spaces (single space inside a phrase is unchanged).
+    Lines starting with # are comments.
+    """
     pairs = []
     with open(path, encoding="utf-8") as f:
         for i, raw in enumerate(f):
@@ -59,11 +63,15 @@ def load_glossary_tsv(path):
             stripped = line.strip()
             if not stripped or stripped.startswith("#"):
                 continue
-            if "\t" not in line:
-                continue
             if i == 0 and _GLOSSARY_HEADER_RE.match(stripped):
                 continue
-            wrong, right = line.split("\t", 1)
+            if "\t" in line:
+                wrong, right = line.split("\t", 1)
+            else:
+                parts = re.split(r"\s{2,}", stripped, maxsplit=1)
+                if len(parts) < 2:
+                    continue
+                wrong, right = parts[0], parts[1]
             wrong, right = wrong.strip(), right.strip()
             if not wrong:
                 continue
@@ -379,8 +387,8 @@ class Recorder:
         self.transcriber = transcriber
         self.input_devices = input_devices or []
 
-    def start(self, language=None):
-        thread = threading.Thread(target=self._record_impl, args=(language,))
+    def start(self, language=None, max_time=None):
+        thread = threading.Thread(target=self._record_impl, args=(language, max_time))
         thread.start()
 
     def stop(self):
@@ -398,7 +406,7 @@ class Recorder:
         x_new = np.linspace(0.0, 1.0, num=dst_len, endpoint=False)
         return np.interp(x_new, x_old, audio).astype(np.float32)
 
-    def _record_impl(self, language):
+    def _record_impl(self, language, max_time=None):
         self.recording = True
         target_rate = SAMPLE_RATE
         base_frames = 1024
@@ -510,7 +518,12 @@ class Recorder:
             self.recording = False
             return
 
+        t0 = time.time()
         while self.recording:
+            if max_time is not None and max_time > 0 and (time.time() - t0) >= max_time:
+                print("(max recording time {:.0f}s reached — stopping)".format(max_time))
+                self.recording = False
+                break
             for s in streams:
                 raw = s["stream"].read(s["chunk_frames"], exception_on_overflow=False)
                 s["frames"].append(raw)
@@ -623,7 +636,7 @@ class CLIApp:
             self.started = False
         else:
             print("Starting...")
-            self.recorder.start(self.languages[0] if self.languages else None)
+            self.recorder.start(self.languages[0] if self.languages else None, self.max_time)
             self.started = True
 
     def run(self):
@@ -660,7 +673,7 @@ class CLIAppEnter:
             self.started = False
         else:
             print("Starting...")
-            self.recorder.start(self.languages[0] if self.languages else None)
+            self.recorder.start(self.languages[0] if self.languages else None, self.max_time)
             self.started = True
 
     def run(self):
@@ -841,9 +854,9 @@ def parse_args():
                         help='Specify the two-letter language code (e.g., "en" for English) to improve recognition accuracy. '
                         'This can be especially helpful for smaller model sizes.  To see the full list of supported languages, '
                         'check out the official list [here](https://github.com/openai/whisper/blob/main/whisper/tokenizer.py).')
-    parser.add_argument('-t', '--max_time', type=float, default=30,
-                        help='Specify the maximum recording time in seconds. The app will automatically stop recording after this duration. '
-                        'Default: 30 seconds.')
+    parser.add_argument('-t', '--max_time', type=float, default=None,
+                        help='Optional maximum recording duration in seconds; omit for no limit (default). '
+                        'Recording stops when this elapses or when you toggle stop, whichever comes first.')
     parser.add_argument('--enter-to-toggle', action='store_true',
                         help='Use Enter in the terminal to start/stop recording (no global hotkey). '
                         'Transcription is printed and copied to clipboard for pasting in Cursor.')
@@ -881,8 +894,9 @@ def parse_args():
                         help='UTF-8 file used as initial_prompt (multi-line context). Not for TSV corrections; '
                         'use --glossary-file. Mutually exclusive with --initial-prompt.')
     parser.add_argument('--glossary-file', type=str, default=None, metavar='PATH',
-                        help='UTF-8 TSV: column 1 = text the model often outputs wrong, column 2 = desired text. '
-                        'Applied after each transcription. If you do not pass --initial-prompt / --initial-prompt-file, '
+                        help='UTF-8 glossary table: column 1 = wrong text, column 2 = replacement. '
+                        'Separator: tab, or two-or-more spaces between columns. Applied after each transcription. '
+                        'If you do not pass --initial-prompt / --initial-prompt-file, '
                         'a short initial_prompt is built from unique values in column 2 (see --no-glossary-prompt).')
     parser.add_argument('--no-glossary-prompt', action='store_true',
                         help='With --glossary-file, skip building initial_prompt from column 2 (replacements only).')
