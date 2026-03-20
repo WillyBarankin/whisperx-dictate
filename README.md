@@ -25,6 +25,35 @@ To list device indices (inputs and output loopback candidates), run:
 python whisperx-dictate.py --list-devices
 ```
 
+(or `python -m whisperx_dictate.cli --list-devices` from the project root)
+
+## Project layout
+
+Application code lives in the `whisperx_dictate/` package. Thin launchers in the repo root add the project directory to `sys.path`:
+
+- `whisperx-dictate.py` → CLI (`cli_main`)
+- `whisperx-dictate-gui.py` → desktop GUI (`gui_main`)
+
+## Desktop GUI (tkinter)
+
+Native window (no browser). From the project directory:
+
+```bash
+python whisperx-dictate-gui.py
+```
+
+Equivalent: `python -m whisperx_dictate.gui_app`
+
+Configure language, model, optional remote server URL, glossary / initial-prompt files, save directory, and multi-select audio devices. Click **Load model / connect** (runs in a background thread so the window stays responsive). Optionally enable **Expose local HTTP API** to serve the same JSON endpoints as `--server` on the chosen host/port (default `127.0.0.1:8765`) in a background thread.
+
+**Settings profile:** `gui_config.json` is stored under `%APPDATA%\WhisperXDictate\` on Windows, or `~/.config/whisperx-dictate/` on other platforms. The GUI saves on each successful **Load model / connect**.
+
+The GUI has a **Translate speech to English** checkbox (Whisper `translate` task); leave it off to **transcribe** in the spoken language. Click **Load model / connect** after changing it.
+
+By default the GUI matches the CLI after each dictation: **type into the focused window** and **copy to the clipboard** (disable either via the two checkboxes). Use **Start recording** / **Stop recording**, or enable **global hotkeys** (same `keyboard` library as the CLI; on Windows you may need to run the app as Administrator). Defaults: dictate `ctrl+space`, save last `ctrl+alt+n`, stop recording and save to file `ctrl+alt+space` — configurable in the form and stored in `gui_config.json`. For **multiple audio devices**, use **Ctrl/Shift-click** in the device list (extended selection); each source is captured in parallel so all are mixed for transcription.
+
+**Copy last to clipboard** uses the last transcript; **Save last to note** uses save-directory semantics when set (local mode only for file saves; client mode still uses the server’s `/save`).
+
 ## Run Modes
 
 | Mode | Command | Notes |
@@ -49,7 +78,8 @@ You can customize hotkeys with:
 
 ## Key Arguments
 
-- `-l`, `--language`: language code (`ru`, `en`, etc.)
+- `-l`, `--language`: optional hint for the ASR decoder (`ru`, `en`, etc.). It does **not** mean “translate into this language”: with the default **transcribe** task, text stays in the **spoken** language; empty `-l` enables auto-detection (slower, better for mixed speech).
+- `--translate`: Whisper **translate** task — write **English** text from non-English speech. Off by default (`transcribe`). Use a **multilingual** checkpoint (not `*.en`). In server mode, start the server with `--translate` if you want translated output.
 - `-m`, `--model_name`: `tiny`, `base`, `small`, `medium`, `large`, `large-v2`, `large-v3` (also `.en` variants: `tiny.en`, `base.en`, `small.en`, `medium.en`)
 - `--enter-to-toggle`: use Enter in terminal to start/stop recording
 - `-t`, `--max_time`: optional cap on recording length in seconds; **default: no limit** (stop only via hotkey / Enter). If set, recording stops automatically when the duration elapses
