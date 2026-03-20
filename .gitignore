@@ -2,3 +2,4 @@ venv/
 .cursor/
 __pycache__/
 *.pyc
+glossary.tsv

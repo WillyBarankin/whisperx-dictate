@@ -1,5 +1,6 @@
 import argparse
 import os
+import re
 import time
 import threading
 from datetime import datetime
@@ -42,6 +43,70 @@ def _is_modifier_key(key, modifier_name):
             return True
     return False
 
+
+_GLOSSARY_HEADER_RE = re.compile(
+    r"^(?P<a>from|wrong|misheard|source)\t(?P<b>to|correct|right|target)\s*$",
+    re.IGNORECASE,
+)
+
+
+def load_glossary_tsv(path):
+    """Load UTF-8 TSV: column 1 = text the model may emit, column 2 = replacement. # starts a comment line."""
+    pairs = []
+    with open(path, encoding="utf-8") as f:
+        for i, raw in enumerate(f):
+            line = raw.rstrip("\n\r")
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if "\t" not in line:
+                continue
+            if i == 0 and _GLOSSARY_HEADER_RE.match(stripped):
+                continue
+            wrong, right = line.split("\t", 1)
+            wrong, right = wrong.strip(), right.strip()
+            if not wrong:
+                continue
+            pairs.append((wrong, right))
+    return pairs
+
+
+def _glossary_replacement_order(pairs):
+    """Apply longest wrong-string first so phrases win over shared substrings."""
+    return sorted(pairs, key=lambda p: len(p[0]), reverse=True)
+
+
+def apply_glossary(text, pairs):
+    if not text or not pairs:
+        return text
+    for wrong, right in _glossary_replacement_order(pairs):
+        if wrong and wrong in text:
+            text = text.replace(wrong, right)
+    return text
+
+
+def glossary_initial_prompt(pairs, max_chars=480):
+    """Short ASR bias string built only from unique correct (second) column values."""
+    if not pairs:
+        return None
+    seen = set()
+    terms = []
+    for _, correct in pairs:
+        c = (correct or "").strip()
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        terms.append(c)
+    if not terms:
+        return None
+    body = ", ".join(terms)
+    prefix = "Proper names and terms: "
+    blob = prefix + body
+    if len(blob) > max_chars:
+        blob = blob[: max_chars - 3].rstrip(", ") + "..."
+    return blob
+
+
 class SpeechTranscriber:
     def __init__(
         self,
@@ -52,8 +117,10 @@ class SpeechTranscriber:
         hf_token=None,
         diarize_model="pyannote/speaker-diarization-community-1",
         device="cpu",
+        glossary_pairs=None,
     ):
         self.model = model
+        self.glossary_pairs = glossary_pairs or []
         self.pykeyboard = keyboard.Controller()
         self.save_dir = save_dir
         self.save_naming = save_naming  # "number" or "time"
@@ -146,6 +213,8 @@ class SpeechTranscriber:
                     print("(diarization failed:", e, ")")
 
         text = self._segments_to_text(result["segments"])
+        if text and self.glossary_pairs:
+            text = apply_glossary(text, self.glossary_pairs)
         if text:
             self._last_text = text
         return text if text else None
@@ -192,11 +261,12 @@ class SpeechTranscriber:
 
 class ClientTranscriber:
     """Transcriber that sends audio to a remote server (same hotkeys/clipboard/typing, no local model)."""
-    def __init__(self, server_url, language=None, diarize=False, api_token=None):
+    def __init__(self, server_url, language=None, diarize=False, api_token=None, glossary_pairs=None):
         self.server_url = server_url.rstrip("/")
         self._language = language
         self._diarize = diarize
         self._api_token = api_token
+        self.glossary_pairs = glossary_pairs or []
         self.pykeyboard = keyboard.Controller()
         self.save_dir = None  # save is done on server via POST /save
         self._last_text = None
@@ -270,6 +340,8 @@ class ClientTranscriber:
         if not text:
             print("(no speech detected)")
             return
+        if self.glossary_pairs:
+            text = apply_glossary(text, self.glossary_pairs)
         self._last_text = text
         print("→", text)
         if save_mode:
@@ -801,6 +873,19 @@ def parse_args():
                         help='Diarization model name for WhisperX pyannote pipeline.')
     parser.add_argument('--hf-token', type=str, default=None,
                         help='Hugging Face token for gated diarization models, if required.')
+    parser.add_argument('--initial-prompt', type=str, default=None, metavar='TEXT',
+                        help='Optional ASR initial_prompt: sets decoding context (topic, setting, register, RU/EN mix). '
+                        'For exact string fixes after transcription use --glossary-file. See README. '
+                        'Mutually exclusive with --initial-prompt-file.')
+    parser.add_argument('--initial-prompt-file', type=str, default=None, metavar='PATH',
+                        help='UTF-8 file used as initial_prompt (multi-line context). Not for TSV corrections; '
+                        'use --glossary-file. Mutually exclusive with --initial-prompt.')
+    parser.add_argument('--glossary-file', type=str, default=None, metavar='PATH',
+                        help='UTF-8 TSV: column 1 = text the model often outputs wrong, column 2 = desired text. '
+                        'Applied after each transcription. If you do not pass --initial-prompt / --initial-prompt-file, '
+                        'a short initial_prompt is built from unique values in column 2 (see --no-glossary-prompt).')
+    parser.add_argument('--no-glossary-prompt', action='store_true',
+                        help='With --glossary-file, skip building initial_prompt from column 2 (replacements only).')
     parser.add_argument('--api-token', type=str, default=None, metavar='TOKEN',
                         help='Secret bearer token to protect the HTTP API (server mode) or authenticate against a protected server (client mode). '
                         'Can also be set via the WHISPERX_API_TOKEN environment variable. '
@@ -821,7 +906,23 @@ def parse_args():
             args.input_devices = [int(x.strip()) for x in args.input_devices.split(",") if x.strip()]
         except ValueError as e:
             raise ValueError("Invalid --input-devices format. Use comma-separated integer indices, e.g. 1,3") from e
+    if args.initial_prompt and args.initial_prompt_file:
+        raise ValueError("Use either --initial-prompt or --initial-prompt-file, not both.")
+    if args.glossary_file and not os.path.isfile(args.glossary_file):
+        raise ValueError("Glossary file not found: {}".format(args.glossary_file))
     return args
+
+
+def _resolve_initial_prompt(args):
+    """Return stripped initial_prompt string for whisperx load_model asr_options, or None."""
+    if getattr(args, "initial_prompt_file", None):
+        with open(args.initial_prompt_file, encoding="utf-8") as f:
+            s = f.read().strip()
+        return s if s else None
+    if getattr(args, "initial_prompt", None):
+        s = args.initial_prompt.strip()
+        return s if s else None
+    return None
 
 
 if __name__ == "__main__":
@@ -834,13 +935,27 @@ if __name__ == "__main__":
     lang = args.language[0] if args.language else None
     server_url = getattr(args, "server_url", None)
 
+    glossary_pairs = []
+    if getattr(args, "glossary_file", None):
+        glossary_pairs = load_glossary_tsv(args.glossary_file)
+        print("(glossary: {} replacement rows)".format(len(glossary_pairs)))
+
+    user_prompt = _resolve_initial_prompt(args)
+    use_glossary_prompt = glossary_pairs and not getattr(args, "no_glossary_prompt", False)
+    auto_from_glossary = glossary_initial_prompt(glossary_pairs) if use_glossary_prompt else None
+    initial_prompt = user_prompt or auto_from_glossary
+
     if server_url:
         print("Client mode: using server", server_url, "(no local model)")
+        if auto_from_glossary and not user_prompt:
+            print("(note: ASR initial_prompt from glossary applies only on the server; "
+                  "pass the same --glossary-file there, or use --initial-prompt on the server)")
         transcriber = ClientTranscriber(
             server_url,
             language=lang,
             diarize=getattr(args, "diarize", False),
             api_token=getattr(args, "api_token", None),
+            glossary_pairs=glossary_pairs,
         )
     else:
         import torch
@@ -850,7 +965,11 @@ if __name__ == "__main__":
         if model_name == "large":
             model_name = "large-v2"
         print(f"Loading model ({model_name}) on {device}...")
-        model = whisperx.load_model(model_name, device, language=lang)
+        asr_options = {"initial_prompt": initial_prompt} if initial_prompt else None
+        if initial_prompt:
+            src = "glossary (compact)" if not user_prompt and auto_from_glossary else "explicit"
+            print("(using ASR initial_prompt [{}], {} chars)".format(src, len(initial_prompt)))
+        model = whisperx.load_model(model_name, device, language=lang, asr_options=asr_options)
         print(f"{model_name} model loaded")
         transcriber = SpeechTranscriber(
             model,
@@ -860,6 +979,7 @@ if __name__ == "__main__":
             hf_token=getattr(args, "hf_token", None),
             diarize_model=getattr(args, "diarize_model", "pyannote/speaker-diarization-community-1"),
             device=device,
+            glossary_pairs=glossary_pairs,
         )
     recorder = Recorder(transcriber, input_devices=getattr(args, "input_devices", None))
 

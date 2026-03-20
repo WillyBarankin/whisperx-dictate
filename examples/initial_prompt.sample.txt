@@ -1,0 +1,1 @@
+Software engineering standup in English. Informal but technical: pull requests, issues, CI pipelines, APIs, deployment, repositories, code review.

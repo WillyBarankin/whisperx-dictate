@@ -1,6 +1,6 @@
 # WhisperX Dictate
 
-Dictation tool based on WhisperX (faster-whisper backend) (faster-whisper backend) with global hotkeys, clipboard output, optional note saving, and server/client modes.
+Dictation tool based on WhisperX (faster-whisper backend) with global hotkeys, clipboard output, optional note saving, and server/client modes.
 
 ## Requirements
 
@@ -63,12 +63,26 @@ You can customize hotkeys with:
 - `--diarize`: enable speaker diarization (`[SPEAKER_XX]` labels)
 - `--diarize-model`: diarization model name (default `pyannote/speaker-diarization-community-1`)
 - `--hf-token`: Hugging Face token for gated diarization models (if needed)
+- `--initial-prompt TEXT`: optional [Whisper `initial_prompt`](https://github.com/SYSTRAN/faster-whisper) via WhisperX `asr_options`. Sets **context** for decoding (topic, situation, language/register mix)—see **Steering recognition** below. **Not** a replacement for the glossary when you need exact spellings. Keep it short. Mutually exclusive with `--initial-prompt-file`.
+- `--initial-prompt-file PATH`: same, but read from a UTF-8 file (multi-line context). See **Initial prompt example** below.
+- `--glossary-file PATH`: UTF-8 **TSV** table: column 1 = what the model often prints, column 2 = what you want. Rows are applied as **substring replacements** after each transcript (longer phrases first). If you do **not** use `--initial-prompt` / `--initial-prompt-file`, a **short** `initial_prompt` is auto-built from unique values in column 2 (capped in length) so the context does not turn into a long essay.
+- `--no-glossary-prompt`: use with `--glossary-file` to **only** run replacements and **not** feed column 2 into `initial_prompt` (useful for very large glossaries).
 - `--api-token TOKEN`: bearer token to protect the server or to authenticate against a protected server; also read from `WHISPERX_API_TOKEN` env var
 - `--k_double_cmd`: macOS right-command double-click mode
 
 **API token:** Pass `--api-token` or set `WHISPERX_API_TOKEN` in the environment (preferred for remote deployments so the secret does not appear in `ps` output). The server skips auth only on `GET /health`; all other endpoints return `401` if the token is wrong or missing. The client sends `Authorization: Bearer <token>` automatically.
 
 **Diarization token:** The token is only required when the diarization model is downloaded from the Hub for the first time. You can pass it via `--hf-token`, or set `HF_TOKEN` in the environment, or run `huggingface-cli login` (saves token to `~/.cache/huggingface/token` or `%USERPROFILE%\.cache\huggingface\token`). Once the model is cached locally, it loads from disk and no token is needed.
+
+**Steering recognition — `initial_prompt` vs `--glossary-file`:**
+
+| | **`initial_prompt`** | **`--glossary-file`** |
+|---|----------------------|-------------------------|
+| **Purpose** | Bias *what kind of text* you expect: setting, topic, technical vs casual, mixed RU/EN, domain jargon in prose. | **After** transcription: replace wrong *substrings* with the right text (brands, repeated ASR errors). |
+| **Think of it as** | “This is a standup / lecture / ticket notes…” so token choices fit the scenario. | A deterministic find/replace table. |
+| **Spellings** | Soft hint only; not guaranteed. | Exact output for each row you define. |
+
+Use **both** together when useful: prompt for overall context, glossary for corrections you can list. For systematic typo fixes, prefer the glossary; use the prompt for everything that is not a simple string substitution.
 
 ## Examples
 
@@ -90,6 +104,9 @@ python whisperx-dictate.py -l ru --enter-to-toggle --save-dir ./notes
 
 # Larger model
 python whisperx-dictate.py -m large-v3 -l ru
+
+# TSV glossary: wrong → correct (see "Glossary" below)
+python whisperx-dictate.py -l ru --glossary-file examples/glossary.sample.tsv
 
 # Server mode (localhost only, no auth needed)
 python whisperx-dictate.py --server -l ru --save-dir ./notes --host 0.0.0.0 --port 8765
@@ -136,3 +153,51 @@ curl -X POST -H "Authorization: Bearer mysecret" "http://host:8765/save"
 
 - Microphone access is required
 - For global hotkeys on Windows, run terminal as Administrator if hotkeys are not detected
+
+## Initial prompt example
+
+[`initial_prompt`](https://github.com/SYSTRAN/faster-whisper) is conditioning text read **before** your audio: the decoder favors words and phrasing that *fit* that scenario. Below is a **context** example (engineering standup), not a spelling checklist—for “always write X as Y” use the **glossary** instead.
+
+**File** [`examples/initial_prompt.sample.txt`](examples/initial_prompt.sample.txt):
+
+```text
+Software engineering standup in English. Informal but technical: pull requests, issues, CI pipelines, APIs, deployment, repositories, code review.
+```
+
+**One-line CLI** (escape quotes on your shell if needed):
+
+```bash
+python whisperx-dictate.py -l en --initial-prompt "Engineering standup: GitHub, CI, APIs, deployment, informal technical English."
+```
+
+**With file:**
+
+```bash
+python whisperx-dictate.py -l en --initial-prompt-file examples/initial_prompt.sample.txt
+```
+
+Other ideas for `initial_prompt`: lecture notes in Russian with English IT terms; medical or legal dictation; customer call summary in a given industry vocabulary—still **short** (a few sentences).
+
+Server mode loads the model once: pass the same flags when starting the server so `initial_prompt` applies to every request. Client-only mode does not load the model; configure the prompt on the machine that runs `--server`.
+
+## Glossary (table wrong → correct)
+
+This is the right tool for **deterministic** corrections (exact substrings). It complements an `initial_prompt` that only describes *context*; see **Steering recognition** above.
+
+Edit a **tab-separated** file (UTF-8). One row per mishearing:
+
+- **Column 1:** substring as Whisper printed it (include each common variant: different casing, Russian transcript of an English name, etc.).
+- **Column 2:** exact text you want in the final transcript.
+- Lines starting with `#` are comments. Optional header row `wrong<TAB>correct` (or `from` / `to`) is ignored.
+- Replacements run **longest match first**, so a row `wabbits` → `rabbits` is applied before a shorter row `wabbit` → `rabbit` if you add both.
+
+Example: [`examples/glossary.sample.tsv`](examples/glossary.sample.tsv).
+
+```text
+wrong	correct
+wabbit	rabbit
+```
+
+This is the main way to grow a “dictionary” without bloating `initial_prompt`: add rows as you notice errors. Use `--no-glossary-prompt` if you only want deterministic fixes and rely on `-l`, model size, or a small `--initial-prompt` for ASR bias.
+
+**Client + server:** Replacements run on the client too if you pass `--glossary-file` on the client (useful if the server was started without the glossary). For `initial_prompt` derived from the glossary, start the **server** with the same `--glossary-file` (or an explicit `--initial-prompt`).
