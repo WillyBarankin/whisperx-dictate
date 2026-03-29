@@ -128,11 +128,14 @@ def cli_main(argv=None):
         if (getattr(args, "save_dir", None) or getattr(args, "server_url", None)) and platform.system() == "Windows":
             try:
                 import keyboard as kb
+                from whisperx_dictate.win_keyboard_hooks import hotkey_registration_layout_fix
+
                 save_hk = getattr(args, "save_hotkey", "ctrl+alt+n").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
-                kb.add_hotkey(save_hk, app.save_last_note, suppress=False)
-                transcriber.save_note_hint = save_hk
                 save_stop_hk = getattr(args, "save_stop_hotkey", "ctrl+alt+space").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
-                kb.add_hotkey(save_stop_hk, app.stop_and_save, suppress=False)
+                with hotkey_registration_layout_fix():
+                    kb.add_hotkey(save_hk, app.save_last_note, suppress=False)
+                    kb.add_hotkey(save_stop_hk, app.stop_and_save, suppress=False)
+                transcriber.save_note_hint = save_hk
                 print("Stop recording + save to file: {}".format(save_stop_hk))
             except Exception:
                 pass
@@ -145,16 +148,20 @@ def cli_main(argv=None):
     if platform.system() == "Windows":
         try:
             import keyboard as kb
+            from whisperx_dictate.win_keyboard_hooks import hotkey_registration_layout_fix
+
             hotkey_str = key_combo.replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
             if hotkey_str in ("ctrl+alt", "control+alt"):
                 hotkey_str = "ctrl+alt+space"
-            kb.add_hotkey(hotkey_str, app.toggle, suppress=False)
+            save_hk = getattr(args, "save_hotkey", "ctrl+alt+n").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
+            save_stop_hk = getattr(args, "save_stop_hotkey", "ctrl+alt+space").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
+            with hotkey_registration_layout_fix():
+                kb.add_hotkey(hotkey_str, app.toggle, suppress=False)
+                if getattr(args, "save_dir", None) or getattr(args, "server_url", None):
+                    kb.add_hotkey(save_hk, app.save_last_note, suppress=False)
+                    kb.add_hotkey(save_stop_hk, app.stop_and_save, suppress=False)
             if getattr(args, "save_dir", None) or getattr(args, "server_url", None):
-                save_hk = getattr(args, "save_hotkey", "ctrl+alt+n").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
-                kb.add_hotkey(save_hk, app.save_last_note, suppress=False)
                 transcriber.save_note_hint = save_hk
-                save_stop_hk = getattr(args, "save_stop_hotkey", "ctrl+alt+space").replace("_l", "").replace("_r", "").replace("cmd", "win").replace("command", "win").lower()
-                kb.add_hotkey(save_stop_hk, app.stop_and_save, suppress=False)
             use_keyboard_lib = True
             key_combo = hotkey_str
         except ImportError:

@@ -11,6 +11,22 @@ except ImportError:
 
 from whisperx_dictate.glossary import apply_glossary
 
+# TUIs (e.g. Claude Code in terminal) drop key events if injection is too fast; ~2.5ms/char loses spaces on long lines.
+_INJECT_KEY_DELAY_SEC = 0.022
+
+
+def _inject_type_text(controller: keyboard.Controller, text: str) -> None:
+    started = False
+    for element in text:
+        if element == " " and not started:
+            continue
+        started = True
+        try:
+            controller.type(element)
+            time.sleep(_INJECT_KEY_DELAY_SEC)
+        except Exception:
+            pass
+
 
 class SpeechTranscriber:
     def __init__(
@@ -174,16 +190,7 @@ class SpeechTranscriber:
         elif self.copy_to_clipboard:
             self._msg("(install pyperclip for clipboard: pip install pyperclip)")
         if self.inject_typing:
-            started = False
-            for element in text:
-                if element == " " and not started:
-                    continue
-                started = True
-                try:
-                    self.pykeyboard.type(element)
-                    time.sleep(0.0025)
-                except Exception:
-                    pass
+            _inject_type_text(self.pykeyboard, text)
         if self.save_note_hint:
             self._msg("(save to note: {})".format(self.save_note_hint))
 
@@ -315,15 +322,6 @@ class ClientTranscriber:
         elif self.copy_to_clipboard:
             self._msg("(install pyperclip for clipboard: pip install pyperclip)")
         if self.inject_typing:
-            started = False
-            for element in text:
-                if element == " " and not started:
-                    continue
-                started = True
-                try:
-                    self.pykeyboard.type(element)
-                    time.sleep(0.0025)
-                except Exception:
-                    pass
+            _inject_type_text(self.pykeyboard, text)
         if self.save_note_hint:
             self._msg("(save to note: {})".format(self.save_note_hint))

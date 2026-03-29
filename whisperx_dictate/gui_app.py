@@ -14,6 +14,7 @@ from whisperx_dictate.runtime import build_recorder, build_transcriber, prepare_
 from whisperx_dictate.server import run_server_in_thread
 from whisperx_dictate import app_icon, tray_support
 from whisperx_dictate.win_gui_console import apply_gui_console_preference
+from whisperx_dictate.win_keyboard_hooks import hotkey_registration_layout_fix
 
 
 def _release_transcriber_resources(transcriber) -> None:
@@ -603,12 +604,13 @@ def gui_main():
         ssh = _normalize_keyboard_lib_hotkey(save_stop_hotkey_var.get())
         hooks = []
         try:
-            kb.add_hotkey(dh, lambda: root.after(0, toggle_record), suppress=False)
-            hooks.append(dh)
-            kb.add_hotkey(sh, lambda: root.after(0, save_note), suppress=False)
-            hooks.append(sh)
-            kb.add_hotkey(ssh, lambda: root.after(0, stop_and_save_gui), suppress=False)
-            hooks.append(ssh)
+            with hotkey_registration_layout_fix():
+                kb.add_hotkey(dh, lambda: root.after(0, toggle_record), suppress=False)
+                hooks.append(dh)
+                kb.add_hotkey(sh, lambda: root.after(0, save_note), suppress=False)
+                hooks.append(sh)
+                kb.add_hotkey(ssh, lambda: root.after(0, stop_and_save_gui), suppress=False)
+                hooks.append(ssh)
         except Exception as e:
             append_out(f"(hotkey registration failed: {e})")
             return
