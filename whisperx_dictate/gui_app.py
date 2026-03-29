@@ -16,6 +16,31 @@ from whisperx_dictate import app_icon, tray_support
 from whisperx_dictate.win_gui_console import apply_gui_console_preference
 
 
+def _release_transcriber_resources(transcriber) -> None:
+    """Drop heavy model references before loading another (GPU RAM)."""
+    if transcriber is None:
+        return
+    try:
+        transcriber._diarization_pipeline = None
+    except Exception:
+        pass
+    try:
+        if getattr(transcriber, "model", None) is not None:
+            transcriber.model = None
+    except Exception:
+        pass
+    try:
+        import gc
+
+        gc.collect()
+        import torch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def gui_config_path():
     if os.name == "nt":
         base = os.environ.get("APPDATA", os.path.expanduser("~"))
@@ -435,7 +460,13 @@ def gui_main():
                         port,
                         lang0,
                         api_token,
+                        load_gen,
                     ) = payload
+                    cur_gen = int(state.get("_load_gen", 0))
+                    stale = load_gen != cur_gen
+                    if stale:
+                        _release_transcriber_resources(transcriber)
+                        continue
                     state["transcriber"] = transcriber
                     state["recorder"] = recorder
                     state["started"] = False
@@ -468,6 +499,20 @@ def gui_main():
 
     def do_load():
         unregister_gui_hotkeys()
+        rec0 = state.get("recorder")
+        if rec0 is not None and state.get("started"):
+            status_var.set("Stopping recording before reload…")
+            root.update_idletasks()
+            rec0.stop()
+            rec0.join()
+            state["started"] = False
+            rec_btn.configure(text="Start recording")
+        old_tr = state.get("transcriber")
+        state["transcriber"] = None
+        state["recorder"] = None
+        _release_transcriber_resources(old_tr)
+        state["_load_gen"] = int(state.get("_load_gen", 0)) + 1
+        load_gen = state["_load_gen"]
         try:
             vals = _collect_form_values(
                 lang_var, model_var, translate_var, server_var, api_var, gloss_var, ip_var, save_var,
@@ -498,6 +543,7 @@ def gui_main():
         copy_clip = copy_clipboard_var.get()
 
         def worker():
+            gen = load_gen
             try:
                 glossary_pairs, initial_prompt, user_prompt, auto_from_glossary = prepare_glossary_and_prompt(
                     args_obj, emit_print=False,
@@ -524,7 +570,9 @@ def gui_main():
                 recorder = build_recorder(transcriber, args_obj, on_message=on_message)
                 lang0 = args_obj.language[0] if args_obj.language else None
                 api_token = args_obj.api_token
-                msg_queue.put(("load_ok", (transcriber, recorder, expose, host, port, lang0, api_token)))
+                msg_queue.put(
+                    ("load_ok", (transcriber, recorder, expose, host, port, lang0, api_token, gen)),
+                )
             except Exception as e:
                 msg_queue.put(("load_err", f"Load failed: {e}"))
 
@@ -533,13 +581,13 @@ def gui_main():
     def unregister_gui_hotkeys():
         try:
             import keyboard as kb
-            for h in state.pop("hotkey_hooks", []):
-                try:
-                    kb.remove_hotkey(h)
-                except Exception:
-                    pass
+
+            kb.unhook_all()
         except ImportError:
             pass
+        except Exception:
+            pass
+        state.pop("hotkey_hooks", None)
 
     def register_gui_hotkeys():
         unregister_gui_hotkeys()

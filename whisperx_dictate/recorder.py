@@ -12,6 +12,7 @@ class Recorder:
         self.transcriber = transcriber
         self.input_devices = input_devices or []
         self.on_message = on_message
+        self._record_thread = None
 
     def _msg(self, *parts):
         if self.on_message:
@@ -20,11 +21,18 @@ class Recorder:
             print(*parts)
 
     def start(self, language=None, max_time=None):
-        thread = threading.Thread(target=self._record_impl, args=(language, max_time))
+        thread = threading.Thread(target=self._record_impl, args=(language, max_time), daemon=True)
+        self._record_thread = thread
         thread.start()
 
     def stop(self):
         self.recording = False
+
+    def join(self, timeout=120.0):
+        t = self._record_thread
+        if t is not None and t.is_alive():
+            t.join(timeout=timeout)
+        self._record_thread = None
 
     @staticmethod
     def _resample_mono(audio, src_rate, dst_rate):
