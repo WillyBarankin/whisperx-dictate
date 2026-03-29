@@ -11,6 +11,11 @@ from tkinter import filedialog, messagebox, ttk
 
 from whisperx_dictate.devices import list_input_devices
 from whisperx_dictate.runtime import build_recorder, build_transcriber, prepare_glossary_and_prompt
+from whisperx_dictate.transcribers import (
+    DEFAULT_INJECT_CHAR_DELAY_MS,
+    PRESET_CUSTOM_CHAR_DELAY_MS,
+    PRESET_CUSTOM_SPACE_EXTRA_MS,
+)
 from whisperx_dictate.server import run_server_in_thread
 from whisperx_dictate import app_icon, tray_support
 from whisperx_dictate.win_gui_console import apply_gui_console_preference
@@ -22,12 +27,9 @@ def _release_transcriber_resources(transcriber) -> None:
     if transcriber is None:
         return
     try:
-        transcriber._diarization_pipeline = None
-    except Exception:
-        pass
-    try:
-        if getattr(transcriber, "model", None) is not None:
-            transcriber.model = None
+        release = getattr(transcriber, "release_model_resources", None)
+        if release:
+            release()
     except Exception:
         pass
     try:
@@ -37,7 +39,11 @@ def _release_transcriber_resources(transcriber) -> None:
         import torch
 
         if torch.cuda.is_available():
+            torch.cuda.synchronize()
             torch.cuda.empty_cache()
+            if hasattr(torch.cuda, "ipc_collect"):
+                torch.cuda.ipc_collect()
+        gc.collect()
     except Exception:
         pass
 
@@ -79,6 +85,9 @@ DEFAULT_CONFIG = {
     "save_hotkey": "ctrl+alt+n",
     "save_stop_hotkey": "ctrl+alt+space",
     "inject_typing": True,
+    "inject_type_use_custom_delays": False,
+    "inject_type_char_delay_ms": PRESET_CUSTOM_CHAR_DELAY_MS,
+    "inject_type_space_extra_ms": PRESET_CUSTOM_SPACE_EXTRA_MS,
     "copy_to_clipboard": True,
     "translate": False,
     "minimize_to_tray": True,
@@ -129,12 +138,55 @@ def _parse_max_time(s):
     return float(s)
 
 
+def _parse_non_negative_ms(s, label):
+    s = (s or "").strip()
+    if not s:
+        raise ValueError(f"{label}: enter a number (milliseconds).") from None
+    try:
+        v = float(s)
+    except ValueError:
+        raise ValueError(f"{label} must be a number (milliseconds).") from None
+    if v < 0:
+        raise ValueError(f"{label} cannot be negative.")
+    return v
+
+
+def _parse_non_negative_ms_or_default(s, default):
+    s = (s or "").strip()
+    if not s:
+        return float(default)
+    return _parse_non_negative_ms(s, "Delay")
+
+
+def _inject_timing_from_values(values):
+    use_c = bool(values.get("inject_type_use_custom_delays"))
+    if use_c:
+        char_ms = _parse_non_negative_ms(values.get("inject_type_char_delay_ms"), "Character delay")
+        space_ms = _parse_non_negative_ms(values.get("inject_type_space_extra_ms"), "Extra delay after space")
+    else:
+        char_ms = _parse_non_negative_ms_or_default(
+            values.get("inject_type_char_delay_ms"), PRESET_CUSTOM_CHAR_DELAY_MS,
+        )
+        space_ms = _parse_non_negative_ms_or_default(
+            values.get("inject_type_space_extra_ms"), PRESET_CUSTOM_SPACE_EXTRA_MS,
+        )
+    return use_c, char_ms, space_ms
+
+
+def _ms_cfg_to_str(v, preset):
+    if v is None or v == "":
+        v = preset
+    if isinstance(v, (int, float)) and float(v) == int(float(v)):
+        return str(int(v))
+    return str(v)
+
+
 def _collect_form_values(
     lang_var, model_var, translate_var, server_var, api_var, gloss_var, ip_var, save_var,
     save_naming_var, hf_var, max_t_var, diarize_var, no_gloss_prompt_var,
     expose_api_var, host_var, port_var, devices_listbox,
     enable_hotkeys_var, dict_hotkey_var, save_hotkey_var, save_stop_hotkey_var,
-    inject_typing_var, copy_clipboard_var, minimize_to_tray_var,
+    inject_typing_var, inject_custom_var, inject_char_var, inject_space_var, copy_clipboard_var, minimize_to_tray_var,
 ):
     sel = [devices_listbox.get(i) for i in devices_listbox.curselection()]
     indices = []
@@ -168,6 +220,9 @@ def _collect_form_values(
         "save_hotkey": save_hotkey_var.get(),
         "save_stop_hotkey": save_stop_hotkey_var.get(),
         "inject_typing": inject_typing_var.get(),
+        "inject_type_use_custom_delays": inject_custom_var.get(),
+        "inject_type_char_delay_ms": inject_char_var.get(),
+        "inject_type_space_extra_ms": inject_space_var.get(),
         "copy_to_clipboard": copy_clipboard_var.get(),
         "minimize_to_tray": minimize_to_tray_var.get(),
     }
@@ -191,6 +246,8 @@ def _build_args_from_form(values):
     except (TypeError, ValueError):
         port = 8765
 
+    use_custom, char_ms, space_ms = _inject_timing_from_values(values)
+
     return SimpleNamespace(
         language=[lang] if lang else None,
         model_name=values.get("model_name") or "base",
@@ -210,6 +267,10 @@ def _build_args_from_form(values):
         host=(values.get("host") or "127.0.0.1").strip(),
         port=port,
         translate=bool(values.get("translate", False)),
+        inject_type_delay_ms=None,
+        inject_type_use_custom_delays=use_custom,
+        inject_type_char_delay_ms=char_ms,
+        inject_type_space_extra_ms=space_ms,
     )
 
 
@@ -226,7 +287,7 @@ def gui_main():
         "transcriber": None,
         "recorder": None,
         "started": False,
-        "api_started": False,
+        "api_holder": None,
         "hotkey_hooks": [],
         "tray_icon": None,
     }
@@ -365,6 +426,13 @@ def gui_main():
 
     row += 1
     inject_typing_var = tk.BooleanVar(value=cfg.get("inject_typing", True))
+    inject_custom_var = tk.BooleanVar(value=cfg.get("inject_type_use_custom_delays", False))
+    inject_char_var = tk.StringVar(
+        value=_ms_cfg_to_str(cfg.get("inject_type_char_delay_ms"), PRESET_CUSTOM_CHAR_DELAY_MS),
+    )
+    inject_space_var = tk.StringVar(
+        value=_ms_cfg_to_str(cfg.get("inject_type_space_extra_ms"), PRESET_CUSTOM_SPACE_EXTRA_MS),
+    )
     copy_clipboard_var = tk.BooleanVar(value=cfg.get("copy_to_clipboard", True))
     post_row = ttk.Frame(main)
     post_row.grid(row=row, column=0, columnspan=3, sticky="w")
@@ -378,6 +446,42 @@ def gui_main():
         text="Copy transcript to clipboard after dictation",
         variable=copy_clipboard_var,
     ).pack(side=tk.LEFT)
+
+    row += 1
+    inject_frame = ttk.Frame(main)
+    inject_frame.grid(row=row, column=0, columnspan=3, sticky="w", pady=(2, 0))
+    ttk.Checkbutton(
+        inject_frame,
+        text=(
+            f"Custom typing delays (when off: built-in ~{DEFAULT_INJECT_CHAR_DELAY_MS:g} ms per character)"
+        ),
+        variable=inject_custom_var,
+    ).grid(row=0, column=0, columnspan=4, sticky="w")
+    ttk.Label(inject_frame, text="After each character (ms):").grid(row=1, column=0, sticky="w", padx=(16, 4))
+    char_entry = ttk.Entry(inject_frame, textvariable=inject_char_var, width=8)
+    char_entry.grid(row=1, column=1, sticky="w")
+    ttk.Label(inject_frame, text="Extra after each space (ms):").grid(row=1, column=2, sticky="w", padx=(12, 4))
+    space_entry = ttk.Entry(inject_frame, textvariable=inject_space_var, width=8)
+    space_entry.grid(row=1, column=3, sticky="w")
+
+    def _sync_inject_delay_entries(*_):
+        st = tk.NORMAL if inject_custom_var.get() else tk.DISABLED
+        char_entry.configure(state=st)
+        space_entry.configure(state=st)
+
+    inject_custom_var.trace_add("write", _sync_inject_delay_entries)
+    _sync_inject_delay_entries()
+
+    def _inject_sync_to_transcriber(tr):
+        vals = {
+            "inject_type_use_custom_delays": inject_custom_var.get(),
+            "inject_type_char_delay_ms": inject_char_var.get(),
+            "inject_type_space_extra_ms": inject_space_var.get(),
+        }
+        use_c, char_ms, space_ms = _inject_timing_from_values(vals)
+        tr.inject_type_use_custom_delays = use_c
+        tr.inject_type_char_delay_ms = char_ms
+        tr.inject_type_space_extra_ms = space_ms
 
     row += 1
     minimize_to_tray_var = tk.BooleanVar(value=cfg.get("minimize_to_tray", True))
@@ -472,20 +576,35 @@ def gui_main():
                     state["recorder"] = recorder
                     state["started"] = False
                     rec_btn.configure(text="Start recording")
-                    if expose and not state["api_started"]:
-                        try:
-                            run_server_in_thread(
-                                transcriber,
-                                host,
-                                port,
-                                language=lang0,
-                                api_token=api_token,
-                            )
-                        except Exception as e:
-                            append_out(f"(API thread failed: {e})")
+                    if expose:
+                        h = state.get("api_holder")
+                        if h is None:
+                            h = [transcriber]
+                            state["api_holder"] = h
+                            try:
+                                run_server_in_thread(
+                                    h,
+                                    host,
+                                    port,
+                                    language=lang0,
+                                    api_token=api_token,
+                                )
+                            except Exception as e:
+                                append_out(f"(API thread failed: {e})")
+                            else:
+                                append_out(f"Local API: http://{host}:{port}/")
                         else:
-                            state["api_started"] = True
-                            append_out(f"Local API: http://{host}:{port}/")
+                            prev = h[0]
+                            h[0] = transcriber
+                            if prev is not None and prev is not transcriber:
+                                _release_transcriber_resources(prev)
+                    else:
+                        h = state.get("api_holder")
+                        if h and h[0] is not None:
+                            prev = h[0]
+                            h[0] = None
+                            if prev is not transcriber:
+                                _release_transcriber_resources(prev)
                     status_var.set("Ready")
                     load_btn.configure(state=tk.NORMAL)
                     rec_btn.configure(state=tk.NORMAL)
@@ -511,6 +630,9 @@ def gui_main():
         old_tr = state.get("transcriber")
         state["transcriber"] = None
         state["recorder"] = None
+        h = state.get("api_holder")
+        if old_tr is not None and h and h[0] is old_tr:
+            h[0] = None
         _release_transcriber_resources(old_tr)
         state["_load_gen"] = int(state.get("_load_gen", 0)) + 1
         load_gen = state["_load_gen"]
@@ -520,16 +642,18 @@ def gui_main():
                 save_naming_var, hf_var, max_t_var, diarize_var, no_gloss_prompt_var,
                 expose_api_var, host_var, port_var, devices_listbox,
                 enable_hotkeys_var, dict_hotkey_var, save_hotkey_var, save_stop_hotkey_var,
-                inject_typing_var, copy_clipboard_var, minimize_to_tray_var,
+                inject_typing_var, inject_custom_var, inject_char_var, inject_space_var, copy_clipboard_var, minimize_to_tray_var,
             )
             args_obj = _build_args_from_form(vals)
         except (ValueError, TypeError) as e:
             messagebox.showerror("Invalid settings", str(e))
             return
+        vals["inject_type_use_custom_delays"] = args_obj.inject_type_use_custom_delays
+        vals["inject_type_char_delay_ms"] = args_obj.inject_type_char_delay_ms
+        vals["inject_type_space_extra_ms"] = args_obj.inject_type_space_extra_ms
         save_gui_config(vals)
         cfg.update(vals)
         load_btn.configure(state=tk.DISABLED)
-        state["api_started"] = False
         status_var.set("Loading model / connecting…")
         expose = expose_api_var.get() and not (args_obj.server_url)
         try:
@@ -653,6 +777,11 @@ def gui_main():
             if tr:
                 tr.inject_typing = inject_typing_var.get()
                 tr.copy_to_clipboard = copy_clipboard_var.get()
+                try:
+                    _inject_sync_to_transcriber(tr)
+                except ValueError as e:
+                    messagebox.showerror("Invalid settings", str(e))
+                    return
             status_var.set("Recording…")
             state["started"] = True
             rec_btn.configure(text="Stop recording")

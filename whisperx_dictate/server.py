@@ -8,15 +8,25 @@ import numpy as np
 from whisperx_dictate.devices import SAMPLE_RATE
 
 
-def create_flask_app(transcriber, language=None, api_token=None):
-    """Build Flask app instance; does not run it."""
+def create_flask_app(transcriber_holder, language=None, api_token=None):
+    """Build Flask app instance; does not run it.
+
+    ``transcriber_holder`` must be a mutable one-element list ``[transcriber]`` (or ``[None]``).
+    Replace ``holder[0]`` when reloading the model so the same server thread keeps serving.
+    """
     from flask import Flask, request, jsonify
     import whisperx
 
+    if not isinstance(transcriber_holder, list) or not transcriber_holder:
+        raise TypeError("transcriber_holder must be a non-empty list")
+
     app = Flask(__name__)
-    _transcriber = transcriber
+    _holder = transcriber_holder
     _lang = language
     _api_token = api_token
+
+    def _current():
+        return _holder[0]
 
     if _api_token:
         @app.before_request
@@ -33,11 +43,17 @@ def create_flask_app(transcriber, language=None, api_token=None):
 
     @app.route("/last", methods=["GET"])
     def last():
-        text = getattr(_transcriber, "_last_text", None)
+        tr = _current()
+        if tr is None:
+            return jsonify({"text": "", "error": "model not loaded"}), 503
+        text = getattr(tr, "_last_text", None)
         return jsonify({"text": text or ""})
 
     @app.route("/transcribe", methods=["POST"])
     def transcribe():
+        tr = _current()
+        if tr is None:
+            return jsonify({"error": "model not loaded"}), 503
         lang = request.args.get("language") or _lang
         diarize_q = request.args.get("diarize")
         diarize_override = None
@@ -62,21 +78,24 @@ def create_flask_app(transcriber, language=None, api_token=None):
             if not raw:
                 return jsonify({"error": "no audio data"}), 400
             audio_data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-        text = _transcriber.transcribe_to_text(audio_data, language=lang, diarize_override=diarize_override)
+        text = tr.transcribe_to_text(audio_data, language=lang, diarize_override=diarize_override)
         return jsonify({"text": text or "", "language": lang or "auto"})
 
     @app.route("/save", methods=["POST"])
     def save():
-        if not _transcriber.save_dir:
+        tr = _current()
+        if tr is None:
+            return jsonify({"error": "model not loaded"}), 503
+        if not tr.save_dir:
             return jsonify({"error": "save_dir not configured"}), 400
-        if not getattr(_transcriber, "_last_text", None):
+        if not getattr(tr, "_last_text", None):
             return jsonify({"error": "nothing to save"}), 400
-        path = _transcriber._next_save_path()
+        path = tr._next_save_path()
         if not path:
             return jsonify({"error": "save path error"}), 500
         try:
             with open(path, "w", encoding="utf-8") as f:
-                f.write(_transcriber._last_text)
+                f.write(tr._last_text)
             return jsonify({"saved": True, "path": path})
         except Exception as e:
             return jsonify({"error": str(e)}), 500
@@ -91,7 +110,8 @@ def run_server(transcriber, host, port, language=None, api_token=None):
     except ImportError:
         print("Install Flask for server mode: pip install flask")
         return
-    app = create_flask_app(transcriber, language=language, api_token=api_token)
+    holder = [transcriber]
+    app = create_flask_app(holder, language=language, api_token=api_token)
     print("Server: http://{}:{}/  (GET /health, /last; POST /transcribe, /save)".format(host, port))
     if api_token:
         print("Auth: Bearer token required on all endpoints except /health.")
@@ -100,9 +120,12 @@ def run_server(transcriber, host, port, language=None, api_token=None):
     app.run(host=host, port=port, threaded=True, use_reloader=False)
 
 
-def run_server_in_thread(transcriber, host, port, language=None, api_token=None):
-    """Start Flask in a daemon background thread; returns the Thread."""
-    app = create_flask_app(transcriber, language=language, api_token=api_token)
+def run_server_in_thread(transcriber_holder, host, port, language=None, api_token=None):
+    """Start Flask in a daemon background thread; returns the Thread.
+
+    ``transcriber_holder`` is a one-element list shared with the GUI so ``holder[0]`` can be swapped on reload.
+    """
+    app = create_flask_app(transcriber_holder, language=language, api_token=api_token)
 
     def _run():
         app.run(host=host, port=port, threaded=True, use_reloader=False)

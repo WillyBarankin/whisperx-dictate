@@ -4,7 +4,12 @@ import os
 
 from whisperx_dictate.glossary import glossary_initial_prompt, load_glossary_tsv
 from whisperx_dictate.recorder import Recorder
-from whisperx_dictate.transcribers import ClientTranscriber, SpeechTranscriber
+from whisperx_dictate.transcribers import (
+    ClientTranscriber,
+    PRESET_CUSTOM_CHAR_DELAY_MS,
+    PRESET_CUSTOM_SPACE_EXTRA_MS,
+    SpeechTranscriber,
+)
 
 
 def resolve_initial_prompt(args):
@@ -38,6 +43,23 @@ def build_transcriber(args, glossary_pairs, initial_prompt, user_prompt, auto_fr
     """Create SpeechTranscriber or ClientTranscriber. transcriber_kw passed to constructors (on_message, inject_typing, etc.)."""
     lang = args.language[0] if args.language else None
     server_url = getattr(args, "server_url", None)
+    kw = dict(transcriber_kw)
+    use_custom = bool(getattr(args, "inject_type_use_custom_delays", False))
+    if use_custom:
+        kw.setdefault("inject_type_use_custom_delays", True)
+        kw.setdefault(
+            "inject_type_char_delay_ms",
+            float(getattr(args, "inject_type_char_delay_ms", PRESET_CUSTOM_CHAR_DELAY_MS)),
+        )
+        kw.setdefault(
+            "inject_type_space_extra_ms",
+            float(getattr(args, "inject_type_space_extra_ms", PRESET_CUSTOM_SPACE_EXTRA_MS)),
+        )
+    else:
+        kw.setdefault("inject_type_use_custom_delays", False)
+        inj_ms = getattr(args, "inject_type_delay_ms", None)
+        if inj_ms is not None:
+            kw.setdefault("inject_type_delay_ms", float(inj_ms))
 
     if server_url:
         if emit_print:
@@ -53,7 +75,7 @@ def build_transcriber(args, glossary_pairs, initial_prompt, user_prompt, auto_fr
             diarize=getattr(args, "diarize", False),
             api_token=getattr(args, "api_token", None),
             glossary_pairs=glossary_pairs,
-            **transcriber_kw,
+            **kw,
         )
 
     import torch
@@ -85,7 +107,7 @@ def build_transcriber(args, glossary_pairs, initial_prompt, user_prompt, auto_fr
         diarize_model=getattr(args, "diarize_model", "pyannote/speaker-diarization-community-1"),
         device=device,
         glossary_pairs=glossary_pairs,
-        **transcriber_kw,
+        **kw,
     )
 
 

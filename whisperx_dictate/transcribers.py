@@ -1,3 +1,4 @@
+import os
 import time
 
 import numpy as np
@@ -11,11 +12,49 @@ except ImportError:
 
 from whisperx_dictate.glossary import apply_glossary
 
-# TUIs (e.g. Claude Code in terminal) drop key events if injection is too fast; ~2.5ms/char loses spaces on long lines.
-_INJECT_KEY_DELAY_SEC = 0.022
+# When custom typing delays are off: same as early dictate (uniform pause after each char), unless env/CLI uniform override.
+DEFAULT_INJECT_CHAR_DELAY_MS = 2.5
+DEFAULT_INJECT_SPACE_EXTRA_MS = 0.0
+
+# When custom delays are on (GUI/CLI): default field values (ms) — per-char + extra pause after each space.
+PRESET_CUSTOM_CHAR_DELAY_MS = 45.0
+PRESET_CUSTOM_SPACE_EXTRA_MS = 55.0
 
 
-def _inject_type_text(controller: keyboard.Controller, text: str) -> None:
+def _inject_type_delays_builtin(uniform_ms: float | None):
+    """(delay_after_each_char_sec, extra_delay_after_space_sec) for non-custom mode.
+
+    * ``uniform_ms`` (CLI): same delay in ms after **every** character; no extra space pause.
+    * Else env ``WHISPERX_DICTATE_INJECT_DELAY_MS``: same (uniform delay).
+    * Else ``DEFAULT_INJECT_CHAR_DELAY_MS`` / ``DEFAULT_INJECT_SPACE_EXTRA_MS``.
+    """
+    if uniform_ms is not None and uniform_ms > 0:
+        return uniform_ms / 1000.0, 0.0
+    raw = (os.environ.get("WHISPERX_DICTATE_INJECT_DELAY_MS") or "").strip()
+    if raw:
+        try:
+            ms = float(raw)
+            if ms > 0:
+                return ms / 1000.0, 0.0
+        except ValueError:
+            pass
+    return DEFAULT_INJECT_CHAR_DELAY_MS / 1000.0, DEFAULT_INJECT_SPACE_EXTRA_MS / 1000.0
+
+
+def _inject_type_text(
+    controller: keyboard.Controller,
+    text: str,
+    *,
+    uniform_ms: float | None,
+    use_custom_delays: bool,
+    custom_char_ms: float,
+    custom_space_extra_ms: float,
+) -> None:
+    if use_custom_delays:
+        char_delay = max(0.0, custom_char_ms) / 1000.0
+        space_extra = max(0.0, custom_space_extra_ms) / 1000.0
+    else:
+        char_delay, space_extra = _inject_type_delays_builtin(uniform_ms)
     started = False
     for element in text:
         if element == " " and not started:
@@ -23,7 +62,9 @@ def _inject_type_text(controller: keyboard.Controller, text: str) -> None:
         started = True
         try:
             controller.type(element)
-            time.sleep(_INJECT_KEY_DELAY_SEC)
+            time.sleep(char_delay)
+            if element == " " and space_extra > 0:
+                time.sleep(space_extra)
         except Exception:
             pass
 
@@ -43,6 +84,10 @@ class SpeechTranscriber:
         on_transcript=None,
         inject_typing=True,
         copy_to_clipboard=True,
+        inject_type_delay_ms=None,
+        inject_type_use_custom_delays=False,
+        inject_type_char_delay_ms=None,
+        inject_type_space_extra_ms=None,
     ):
         self.model = model
         self.glossary_pairs = glossary_pairs or []
@@ -62,6 +107,18 @@ class SpeechTranscriber:
         self.on_transcript = on_transcript
         self.inject_typing = inject_typing
         self.copy_to_clipboard = copy_to_clipboard
+        self.inject_type_delay_ms = inject_type_delay_ms
+        self.inject_type_use_custom_delays = bool(inject_type_use_custom_delays)
+        self.inject_type_char_delay_ms = (
+            float(inject_type_char_delay_ms)
+            if inject_type_char_delay_ms is not None
+            else PRESET_CUSTOM_CHAR_DELAY_MS
+        )
+        self.inject_type_space_extra_ms = (
+            float(inject_type_space_extra_ms)
+            if inject_type_space_extra_ms is not None
+            else PRESET_CUSTOM_SPACE_EXTRA_MS
+        )
 
     def _msg(self, *parts):
         if self.on_message:
@@ -101,6 +158,31 @@ class SpeechTranscriber:
                 self._msg("(saved to {})".format(path))
             except Exception as e:
                 self._msg("(save failed:", e, ")")
+
+    def release_model_resources(self) -> None:
+        """Drop ASR pipeline, VAD, and diarization weights so GPU memory can be reclaimed."""
+        self._diarization_pipeline = None
+        pl = getattr(self, "model", None)
+        self.model = None
+        if pl is None:
+            return
+        try:
+            pl.vad_model = None
+        except Exception:
+            pass
+        try:
+            fw = getattr(pl, "model", None)
+            try:
+                pl.model = None
+            except Exception:
+                pass
+            if fw is not None:
+                try:
+                    fw.model = None
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _ensure_diarizer(self):
         if self._diarization_pipeline is not None:
@@ -190,7 +272,14 @@ class SpeechTranscriber:
         elif self.copy_to_clipboard:
             self._msg("(install pyperclip for clipboard: pip install pyperclip)")
         if self.inject_typing:
-            _inject_type_text(self.pykeyboard, text)
+            _inject_type_text(
+                self.pykeyboard,
+                text,
+                uniform_ms=self.inject_type_delay_ms,
+                use_custom_delays=self.inject_type_use_custom_delays,
+                custom_char_ms=self.inject_type_char_delay_ms,
+                custom_space_extra_ms=self.inject_type_space_extra_ms,
+            )
         if self.save_note_hint:
             self._msg("(save to note: {})".format(self.save_note_hint))
 
@@ -209,6 +298,10 @@ class ClientTranscriber:
         on_transcript=None,
         inject_typing=True,
         copy_to_clipboard=True,
+        inject_type_delay_ms=None,
+        inject_type_use_custom_delays=False,
+        inject_type_char_delay_ms=None,
+        inject_type_space_extra_ms=None,
     ):
         self.server_url = server_url.rstrip("/")
         self._language = language
@@ -224,12 +317,27 @@ class ClientTranscriber:
         self.on_transcript = on_transcript
         self.inject_typing = inject_typing
         self.copy_to_clipboard = copy_to_clipboard
+        self.inject_type_delay_ms = inject_type_delay_ms
+        self.inject_type_use_custom_delays = bool(inject_type_use_custom_delays)
+        self.inject_type_char_delay_ms = (
+            float(inject_type_char_delay_ms)
+            if inject_type_char_delay_ms is not None
+            else PRESET_CUSTOM_CHAR_DELAY_MS
+        )
+        self.inject_type_space_extra_ms = (
+            float(inject_type_space_extra_ms)
+            if inject_type_space_extra_ms is not None
+            else PRESET_CUSTOM_SPACE_EXTRA_MS
+        )
         try:
             import urllib.request
             with urllib.request.urlopen(self.server_url + "/health", timeout=5) as _:
                 pass
         except Exception as e:
             self._msg("(warning: server not reachable at", self.server_url, "—", e, ")")
+
+    def release_model_resources(self) -> None:
+        """No local ASR weights in client mode."""
 
     def _msg(self, *parts):
         if self.on_message:
@@ -322,6 +430,13 @@ class ClientTranscriber:
         elif self.copy_to_clipboard:
             self._msg("(install pyperclip for clipboard: pip install pyperclip)")
         if self.inject_typing:
-            _inject_type_text(self.pykeyboard, text)
+            _inject_type_text(
+                self.pykeyboard,
+                text,
+                uniform_ms=self.inject_type_delay_ms,
+                use_custom_delays=self.inject_type_use_custom_delays,
+                custom_char_ms=self.inject_type_char_delay_ms,
+                custom_space_extra_ms=self.inject_type_space_extra_ms,
+            )
         if self.save_note_hint:
             self._msg("(save to note: {})".format(self.save_note_hint))

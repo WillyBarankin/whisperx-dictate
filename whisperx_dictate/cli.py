@@ -72,6 +72,37 @@ def parse_args(argv=None):
                         'Default is transcribe (keep spoken language). Use a multilingual model, not *.en.')
     parser.add_argument('--api-token', type=str, default=None, metavar='TOKEN',
                         help='Bearer token for server or client.')
+    parser.add_argument(
+        '--inject-type-delay-ms',
+        type=float,
+        default=None,
+        metavar='MS',
+        dest='inject_type_delay_ms',
+        help='Uniform delay between injected keystrokes (ms). Ignored if --inject-type-custom-delays. '
+        'Otherwise omit for built-in default (2.5 ms per char) or WHISPERX_DICTATE_INJECT_DELAY_MS.',
+    )
+    parser.add_argument(
+        '--inject-type-custom-delays',
+        action='store_true',
+        dest='inject_type_use_custom_delays',
+        help='Use separate delays for characters and for extra pause after each space (see next two flags).',
+    )
+    parser.add_argument(
+        '--inject-type-char-ms',
+        type=float,
+        default=45.0,
+        dest='inject_type_char_delay_ms',
+        metavar='MS',
+        help='With --inject-type-custom-delays: pause after each character (ms). Default: 45.',
+    )
+    parser.add_argument(
+        '--inject-type-space-extra-ms',
+        type=float,
+        default=55.0,
+        dest='inject_type_space_extra_ms',
+        metavar='MS',
+        help='With --inject-type-custom-delays: extra pause after each space (ms). Default: 55.',
+    )
 
     args = parser.parse_args(args=argv)
 
@@ -92,6 +123,11 @@ def parse_args(argv=None):
         raise ValueError("Use either --initial-prompt or --initial-prompt-file, not both.")
     if args.glossary_file and not os.path.isfile(args.glossary_file):
         raise ValueError("Glossary file not found: {}".format(args.glossary_file))
+    if args.inject_type_delay_ms is not None and args.inject_type_delay_ms <= 0:
+        raise ValueError("--inject-type-delay-ms must be a positive number.")
+    if args.inject_type_use_custom_delays:
+        if args.inject_type_char_delay_ms < 0 or args.inject_type_space_extra_ms < 0:
+            raise ValueError("--inject-type-char-ms and --inject-type-space-extra-ms must be >= 0.")
     return args
 
 
