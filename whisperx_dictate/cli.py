@@ -47,8 +47,14 @@ def parse_args(argv=None):
                         help='Server bind address (with --server).')
     parser.add_argument('--port', type=int, default=8765,
                         help='Server port (with --server).')
-    parser.add_argument('--server-url', type=str, default=None, metavar='URL',
-                        help='Remote server URL for transcription (no local model).')
+    parser.add_argument(
+        '--server-url',
+        type=str,
+        default=None,
+        metavar='URL',
+        help='Remote server for transcription (no local model). '
+        'Examples: http://host-pc:8765, https://dictate.example.com, myhost.local:8765',
+    )
     parser.add_argument('--input-devices', type=str, default=None, metavar='IDS',
                         help='Comma-separated device indices.')
     parser.add_argument('--list-devices', action='store_true',

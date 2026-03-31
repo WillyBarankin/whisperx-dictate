@@ -92,7 +92,7 @@ By default the GUI matches the CLI after each dictation: **type into the focused
 | Local hotkeys | `python whisperx-dictate.py -l ru` | `Ctrl+Space` to dictate, `Ctrl+Alt+N` to save last dictation |
 | Enter-to-toggle | `python whisperx-dictate.py -l ru --enter-to-toggle` | Use Enter in terminal instead of global hotkeys |
 | Server (API) | `python whisperx-dictate.py --server -l ru --save-dir ./notes` | Provides `/transcribe`, `/last`, `/save` |
-| Client | `python whisperx-dictate.py --server-url http://127.0.0.1:8765 -l ru` | Keeps local hotkeys, transcribes on remote server |
+| Client | `python whisperx-dictate.py --server-url http://host-pc:8765 -l ru` | Keeps local hotkeys, transcribes on remote server (hostname or IP) |
 | Protected server | `python whisperx-dictate.py --server --api-token mysecret --host 0.0.0.0` | Requires `Authorization: Bearer mysecret` on all endpoints |
 | Client (token) | `python whisperx-dictate.py --server-url http://host:8765 --api-token mysecret` | Sends token automatically with every request |
 

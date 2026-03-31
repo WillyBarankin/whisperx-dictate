@@ -1,5 +1,7 @@
+import ipaddress
 import os
 import time
+from urllib.parse import urlsplit, urlunsplit
 
 import numpy as np
 from pynput import keyboard
@@ -19,6 +21,54 @@ DEFAULT_INJECT_SPACE_EXTRA_MS = 0.0
 # When custom delays are on (GUI/CLI): default field values (ms) — per-char + extra pause after each space.
 PRESET_CUSTOM_CHAR_DELAY_MS = 45.0
 PRESET_CUSTOM_SPACE_EXTRA_MS = 55.0
+
+
+def _host_for_client_url(host: str) -> str:
+    """ASCII hostname for URL (IDNA for unicode); leave IPv4/IPv6 literals unchanged."""
+    if not host:
+        return host
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+    try:
+        return host.encode("idna").decode("ascii")
+    except (UnicodeError, UnicodeDecodeError):
+        return host
+
+
+def normalize_client_server_url(raw: str) -> tuple[str, bool]:
+    """Return ``(normalized_url, scheme_was_missing)``.
+
+    Accepts ``http(s)://host:port``, bare ``host:port`` / ``hostname``, and IDNA hostnames.
+    """
+    s = str(raw).strip()
+    if not s:
+        return "", False
+    scheme_missing = "://" not in s
+    if scheme_missing:
+        s = "http://" + s
+    parts = urlsplit(s)
+    netloc = parts.netloc
+    if not netloc:
+        return s.rstrip("/"), scheme_missing
+    if "@" in netloc:
+        userinfo, hostport = netloc.rsplit("@", 1)
+    else:
+        userinfo, hostport = None, netloc
+    if hostport.startswith("["):
+        hostport_out = hostport
+    elif ":" in hostport:
+        idx = hostport.rfind(":")
+        host_part, port_part = hostport[:idx], hostport[idx + 1 :]
+        host_norm = _host_for_client_url(host_part)
+        hostport_out = f"{host_norm}:{port_part}" if port_part else host_norm
+    else:
+        hostport_out = _host_for_client_url(hostport)
+    netloc_out = f"{userinfo}@{hostport_out}" if userinfo else hostport_out
+    out = urlunsplit((parts.scheme, netloc_out, parts.path, parts.query, parts.fragment))
+    return out.rstrip("/"), scheme_missing
 
 
 def _inject_type_delays_builtin(uniform_ms: float | None):
@@ -305,12 +355,10 @@ class ClientTranscriber:
     ):
         self.on_message = on_message
         self.on_transcript = on_transcript
-        # Accept bare host:port input from CLI/GUI by assuming HTTP.
-        normalized_server_url = str(server_url).strip()
-        if "://" not in normalized_server_url:
-            normalized_server_url = "http://" + normalized_server_url
+        normalized_server_url, scheme_missing = normalize_client_server_url(server_url)
+        if scheme_missing and normalized_server_url:
             self._msg("(info: server URL missing scheme, using", normalized_server_url, ")")
-        self.server_url = normalized_server_url.rstrip("/")
+        self.server_url = normalized_server_url
         self._language = language
         self._diarize = diarize
         self._api_token = api_token

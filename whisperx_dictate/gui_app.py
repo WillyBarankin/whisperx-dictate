@@ -318,7 +318,7 @@ def gui_main():
     ).grid(row=row, column=0, columnspan=3, sticky="w")
 
     row += 1
-    ttk.Label(main, text="Server URL (client mode, optional):").grid(row=row, column=0, sticky="w")
+    ttk.Label(main, text="Server URL (client mode; hostname or IP, optional):").grid(row=row, column=0, sticky="w")
     server_var = tk.StringVar(value=cfg.get("server_url") or "")
     ttk.Entry(main, textvariable=server_var, width=40).grid(row=row, column=1, sticky="ew")
 
