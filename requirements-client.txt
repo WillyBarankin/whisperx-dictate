@@ -1,0 +1,11 @@
+# Client-only: mic capture, hotkeys, typing, clipboard, GUI — transcription is done on a remote machine (--server-url).
+# No torch / torchaudio / whisperx. Usable on Python 3.14+ if wheels exist for these packages.
+pyaudiowpatch>=0.2.12.8; sys_platform == "win32"
+pyaudio>=0.2.14; sys_platform != "win32"
+pynput
+keyboard
+pyperclip
+numpy>=2.1.0
+flask
+pystray
+Pillow

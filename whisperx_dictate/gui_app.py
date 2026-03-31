@@ -572,6 +572,7 @@ def gui_main():
                     if stale:
                         _release_transcriber_resources(transcriber)
                         continue
+                    obsolete = state.get("transcriber")
                     state["transcriber"] = transcriber
                     state["recorder"] = recorder
                     state["started"] = False
@@ -594,17 +595,13 @@ def gui_main():
                             else:
                                 append_out(f"Local API: http://{host}:{port}/")
                         else:
-                            prev = h[0]
                             h[0] = transcriber
-                            if prev is not None and prev is not transcriber:
-                                _release_transcriber_resources(prev)
                     else:
                         h = state.get("api_holder")
-                        if h and h[0] is not None:
-                            prev = h[0]
+                        if h:
                             h[0] = None
-                            if prev is not transcriber:
-                                _release_transcriber_resources(prev)
+                    if obsolete is not None and obsolete is not transcriber:
+                        _release_transcriber_resources(obsolete)
                     status_var.set("Ready")
                     load_btn.configure(state=tk.NORMAL)
                     rec_btn.configure(state=tk.NORMAL)
@@ -613,29 +610,26 @@ def gui_main():
                     append_out(payload)
                     status_var.set("Load failed")
                     load_btn.configure(state=tk.NORMAL)
+                    rec_btn.configure(state=tk.NORMAL)
         except queue.Empty:
             pass
         root.after(150, pump_queue)
 
     def do_load():
-        unregister_gui_hotkeys()
         rec0 = state.get("recorder")
         if rec0 is not None and state.get("started"):
             status_var.set("Stopping recording before reload…")
             root.update_idletasks()
+            rec_thread = getattr(rec0, "_record_thread", None)
             rec0.stop()
-            rec0.join()
+            if rec_thread is not None and rec_thread.is_alive():
+                rec_thread.join(timeout=5.0)
+                if rec_thread.is_alive():
+                    append_out(
+                        "(warning: audio thread still finishing; wait a few seconds before recording again)"
+                    )
             state["started"] = False
             rec_btn.configure(text="Start recording")
-        old_tr = state.get("transcriber")
-        state["transcriber"] = None
-        state["recorder"] = None
-        h = state.get("api_holder")
-        if old_tr is not None and h and h[0] is old_tr:
-            h[0] = None
-        _release_transcriber_resources(old_tr)
-        state["_load_gen"] = int(state.get("_load_gen", 0)) + 1
-        load_gen = state["_load_gen"]
         try:
             vals = _collect_form_values(
                 lang_var, model_var, translate_var, server_var, api_var, gloss_var, ip_var, save_var,
@@ -653,16 +647,20 @@ def gui_main():
         vals["inject_type_space_extra_ms"] = args_obj.inject_type_space_extra_ms
         save_gui_config(vals)
         cfg.update(vals)
-        load_btn.configure(state=tk.DISABLED)
-        status_var.set("Loading model / connecting…")
         expose = expose_api_var.get() and not (args_obj.server_url)
         try:
             host = host_var.get().strip() or "127.0.0.1"
             port = int(port_var.get().strip() or "8765")
         except ValueError:
             messagebox.showerror("Invalid port", "Port must be an integer.")
-            load_btn.configure(state=tk.NORMAL)
             return
+
+        unregister_gui_hotkeys()
+        state["_load_gen"] = int(state.get("_load_gen", 0)) + 1
+        load_gen = state["_load_gen"]
+        load_btn.configure(state=tk.DISABLED)
+        rec_btn.configure(state=tk.DISABLED)
+        status_var.set("Loading model / connecting…")
 
         inject_t = inject_typing_var.get()
         copy_clip = copy_clipboard_var.get()
@@ -706,13 +704,16 @@ def gui_main():
     def unregister_gui_hotkeys():
         try:
             import keyboard as kb
-
-            kb.unhook_all()
         except ImportError:
-            pass
-        except Exception:
-            pass
-        state.pop("hotkey_hooks", None)
+            state.pop("hotkey_hooks", None)
+            return
+        hooks = state.pop("hotkey_hooks", None)
+        if hooks:
+            for h in hooks:
+                try:
+                    kb.remove_hotkey(h)
+                except Exception:
+                    pass
 
     def register_gui_hotkeys():
         unregister_gui_hotkeys()

@@ -303,7 +303,14 @@ class ClientTranscriber:
         inject_type_char_delay_ms=None,
         inject_type_space_extra_ms=None,
     ):
-        self.server_url = server_url.rstrip("/")
+        self.on_message = on_message
+        self.on_transcript = on_transcript
+        # Accept bare host:port input from CLI/GUI by assuming HTTP.
+        normalized_server_url = str(server_url).strip()
+        if "://" not in normalized_server_url:
+            normalized_server_url = "http://" + normalized_server_url
+            self._msg("(info: server URL missing scheme, using", normalized_server_url, ")")
+        self.server_url = normalized_server_url.rstrip("/")
         self._language = language
         self._diarize = diarize
         self._api_token = api_token
@@ -313,8 +320,6 @@ class ClientTranscriber:
         self._last_text = None
         self._save_on_next = False
         self.save_note_hint = None
-        self.on_message = on_message
-        self.on_transcript = on_transcript
         self.inject_typing = inject_typing
         self.copy_to_clipboard = copy_to_clipboard
         self.inject_type_delay_ms = inject_type_delay_ms

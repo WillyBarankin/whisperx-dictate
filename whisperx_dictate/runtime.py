@@ -78,6 +78,10 @@ def build_transcriber(args, glossary_pairs, initial_prompt, user_prompt, auto_fr
             **kw,
         )
 
+    from whisperx_dictate.env_check import ensure_python_supported_for_whisperx
+
+    ensure_python_supported_for_whisperx()
+
     import torch
     import whisperx
 

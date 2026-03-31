@@ -1,10 +1,13 @@
-pyaudio
+# WhisperX (PyPI) supports Python 3.10–3.13 only (requires-python <3.14).
+pyaudiowpatch>=0.2.12.8; sys_platform == "win32"
+pyaudio>=0.2.14; sys_platform != "win32"
 pynput
 keyboard
 pyperclip
-numpy
-torch
-whisperx
+numpy>=2.1.0
+torch>=2.8.0,<2.9
+torchaudio>=2.8.0,<2.9
+whisperx>=3.8.4,<3.9
 flask
 pystray
 Pillow

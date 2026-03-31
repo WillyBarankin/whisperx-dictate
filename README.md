@@ -4,20 +4,44 @@ Dictation tool based on WhisperX (faster-whisper backend) with global hotkeys, c
 
 ## Requirements
 
-- Python 3.10+
+- **Full install (local model or you run `--server`):** Python **3.10–3.13** and `requirements.txt` (PyTorch **2.8.x** + **WhisperX**). **Python 3.14+** is not supported for that stack yet.
+- **Client-only** (this PC only records and sends audio to another machine via **Server URL** / `--server-url`): you **do not** need PyTorch or WhisperX here. Use **`requirements-client.txt`** instead — lighter deps (mic, hotkeys, typing, GUI). That path can work on **newer Python** when wheels exist for those packages.
 - Microphone
-- WhisperX environment (including `torch`, `numpy`, CUDA support if needed)
+- **Windows:** `requirements.txt` uses **`pyaudiowpatch`** (prebuilt wheel, including loopback) instead of building **`pyaudio`**
 - **Windows:** `keyboard` global hotkeys may require running terminal as Administrator
-- **Windows system-audio loopback:** install `pyaudiowpatch` (`pip install pyaudiowpatch`) so output device capture works (output indices are auto-mapped to loopback devices)
-- **macOS/Linux:** PortAudio (for example `brew install portaudio`)
+- **Windows system-audio loopback:** output indices are auto-mapped to loopback devices when using `pyaudiowpatch`
+- **macOS/Linux:** PortAudio (for example `brew install portaudio`) for `pyaudio`
+- **GPU:** install a CUDA build of PyTorch **2.8.x** if needed ([pytorch.org](https://pytorch.org/get-started/locally/)); `requirements.txt` pins the 2.8 line to match WhisperX
 
 ## Installation
 
-From the project directory:
+**If your default `python` is 3.14** (common with a fresh Windows install), `pip install -r requirements.txt` will fail: PyPI has **no PyTorch 2.8 wheels for 3.14**, and WhisperX does not support 3.14 yet. Install **Python 3.12** (or any **3.10–3.13**), then bootstrap a venv (creates `.venv` in this folder):
+
+| Shell | Command |
+|--------|---------|
+| **Command Prompt** (recommended on Windows) | `setup-venv.bat` |
+| **Git Bash** | `bash setup-venv.sh` |
+
+After that, activate the venv whenever you work in the project:
+
+- **Git Bash:** `source .venv/Scripts/activate` (this path exists once the venv is created; if you see “No such file”, run `setup-venv.bat` or `bash setup-venv.sh` first).
+- **Command Prompt:** `.venv\Scripts\activate.bat`
+
+Then `python` / `pip` use that supported version inside the venv.
+
+**Manual install** (if you already have 3.10–3.13 active):
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
+
+**Client-only install** (remote transcription server already running elsewhere):
+
+```bash
+python -m pip install -r requirements-client.txt
+```
+
+Do not use **Expose local HTTP API** or **Load model** locally on a client-only install unless you also install the full `requirements.txt`.
 
 To list device indices (inputs and output loopback candidates), run:
 
@@ -43,7 +67,7 @@ Native window (no browser). From the project directory:
 python whisperx-dictate-gui.py
 ```
 
-On **Windows**, **`python.exe whisperx-dictate-gui.py`** uses a normal console. **`pythonw`** / **`.pyw`** has no console by default; use **`--console`** or **`WHISPERX_DICTATE_GUI_CONSOLE=1`** to allocate one for logging or debugging.
+On **Windows**, **`python.exe whisperx-dictate-gui.py`** uses a normal console. **`pythonw`** / **`.pyw`** avoids a console; if **Python Install Manager** or Explorer still starts **`python.exe`**, `whisperx-dictate-gui.pyw` **re-execs** via **`pythonw.exe`** next to that interpreter when possible. Use **`--console`** or **`WHISPERX_DICTATE_GUI_CONSOLE=1`** only when you want a console for logging or debugging.
 
 Equivalent: `python -m whisperx_dictate.gui_app` (same rules when `gui_main` runs)
 
