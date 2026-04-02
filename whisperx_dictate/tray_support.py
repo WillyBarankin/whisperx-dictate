@@ -27,6 +27,20 @@ def make_tray_image():
     return img
 
 
+def set_tray_recording_indicator(icon, recording: bool):
+    """Switch tray image to green (recording) or normal. Safe if icon is None or lacks cached images."""
+    if icon is None:
+        return
+    try:
+        normal = getattr(icon, "_whisperx_tray_normal", None)
+        rec = getattr(icon, "_whisperx_tray_recording", None)
+        target = rec if recording else normal
+        if target is not None:
+            icon.icon = target
+    except Exception:
+        pass
+
+
 def create_tray_icon(title, on_open, on_quit_after_stop):
     """Run pystray in a daemon thread. Returns Icon.
 
@@ -37,6 +51,7 @@ def create_tray_icon(title, on_open, on_quit_after_stop):
     from pystray import MenuItem as item
 
     image = app_icon.load_pil_icon_for_tray() or make_tray_image()
+    recording_image = app_icon.pil_tray_recording_tint(image)
 
     def open_handler(icon, menu_item):
         on_open()
@@ -50,5 +65,7 @@ def create_tray_icon(title, on_open, on_quit_after_stop):
         item("Exit", quit_handler),
     )
     icon = pystray.Icon("whisperx_dictate", image, title, menu)
+    icon._whisperx_tray_normal = image
+    icon._whisperx_tray_recording = recording_image
     threading.Thread(target=icon.run, daemon=True).start()
     return icon

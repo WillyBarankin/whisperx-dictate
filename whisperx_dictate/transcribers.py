@@ -1,5 +1,6 @@
 import ipaddress
 import os
+import threading
 import time
 from urllib.parse import urlsplit, urlunsplit
 
@@ -169,6 +170,9 @@ class SpeechTranscriber:
             if inject_type_space_extra_ms is not None
             else PRESET_CUSTOM_SPACE_EXTRA_MS
         )
+        # Serialize GPU/model work only (faster-whisper is not thread-safe under Flask threaded=True).
+        # RLock avoids rare same-thread re-entrancy deadlocks; keep the critical section minimal.
+        self._asr_lock = threading.RLock()
 
     def _msg(self, *parts):
         if self.on_message:
@@ -211,28 +215,29 @@ class SpeechTranscriber:
 
     def release_model_resources(self) -> None:
         """Drop ASR pipeline, VAD, and diarization weights so GPU memory can be reclaimed."""
-        self._diarization_pipeline = None
-        pl = getattr(self, "model", None)
-        self.model = None
-        if pl is None:
-            return
-        try:
-            pl.vad_model = None
-        except Exception:
-            pass
-        try:
-            fw = getattr(pl, "model", None)
+        with self._asr_lock:
+            self._diarization_pipeline = None
+            pl = getattr(self, "model", None)
+            self.model = None
+            if pl is None:
+                return
             try:
-                pl.model = None
+                pl.vad_model = None
             except Exception:
                 pass
-            if fw is not None:
+            try:
+                fw = getattr(pl, "model", None)
                 try:
-                    fw.model = None
+                    pl.model = None
                 except Exception:
                     pass
-        except Exception:
-            pass
+                if fw is not None:
+                    try:
+                        fw.model = None
+                    except Exception:
+                        pass
+            except Exception:
+                pass
 
     def _ensure_diarizer(self):
         if self._diarization_pipeline is not None:
@@ -272,17 +277,20 @@ class SpeechTranscriber:
     def transcribe_to_text(self, audio_data, language=None, diarize_override=None):
         """Transcribe audio to text only; returns text or None. Updates _last_text for /save."""
         import whisperx
-        result = self.model.transcribe(audio_data, batch_size=4)
 
-        use_diarization = self.diarize if diarize_override is None else bool(diarize_override)
-        if use_diarization:
-            diarizer = self._ensure_diarizer()
-            if diarizer:
-                try:
-                    diarize_df = diarizer(audio_data)
-                    result = whisperx.assign_word_speakers(diarize_df, result)
-                except Exception as e:
-                    self._msg("(diarization failed:", e, ")")
+        with self._asr_lock:
+            if self.model is None:
+                return None
+            result = self.model.transcribe(audio_data, batch_size=4)
+            use_diarization = self.diarize if diarize_override is None else bool(diarize_override)
+            if use_diarization:
+                diarizer = self._ensure_diarizer()
+                if diarizer:
+                    try:
+                        diarize_df = diarizer(audio_data)
+                        result = whisperx.assign_word_speakers(diarize_df, result)
+                    except Exception as e:
+                        self._msg("(diarization failed:", e, ")")
 
         text = self._segments_to_text(result["segments"])
         if text and self.glossary_pairs:
@@ -447,6 +455,8 @@ class ClientTranscriber:
             self._msg("(save error:", out["error"], ")")
 
     def transcribe(self, audio_data, language=None):
+        # Do not wrap the whole method in a lock: HTTP + inject_typing can take a long time and would
+        # block the next recording. The server serializes ASR with SpeechTranscriber._asr_lock.
         save_mode = self._save_on_next
         self._save_on_next = False
         if audio_data.dtype != np.int16:

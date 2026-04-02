@@ -178,3 +178,26 @@ def load_pil_icon_for_tray():
         return im
     except Exception:
         return None
+
+
+def pil_tray_recording_tint(base):
+    """Recording-state tray icon: same alpha mask as ``base``, RGB recolored to green via luminance.
+
+    Avoids tinting the full square; transparent areas stay transparent.
+    """
+    from PIL import Image, ImageOps
+
+    im = base.convert("RGBA")
+    r, g, b, alpha = im.split()
+    gray = Image.merge("RGB", (r, g, b)).convert("L")
+    colored = ImageOps.colorize(
+        gray,
+        black=(10, 90, 45),
+        white=(175, 255, 190),
+        mid=(45, 175, 95),
+        blackpoint=0,
+        whitepoint=255,
+        midpoint=120,
+    )
+    cr, cg, cb = colored.split()
+    return Image.merge("RGBA", (cr, cg, cb, alpha))

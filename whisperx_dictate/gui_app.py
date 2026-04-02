@@ -577,6 +577,7 @@ def gui_main():
                     state["recorder"] = recorder
                     state["started"] = False
                     rec_btn.configure(text="Start recording")
+                    sync_tray_recording_icon()
                     if expose:
                         h = state.get("api_holder")
                         if h is None:
@@ -630,6 +631,7 @@ def gui_main():
                     )
             state["started"] = False
             rec_btn.configure(text="Start recording")
+            sync_tray_recording_icon()
         try:
             vals = _collect_form_values(
                 lang_var, model_var, translate_var, server_var, api_var, gloss_var, ip_var, save_var,
@@ -742,6 +744,12 @@ def gui_main():
         state["hotkey_hooks"] = hooks
         append_out(f"(global hotkeys: dictate {dh} | save {sh} | stop+save {ssh})")
 
+    def sync_tray_recording_icon():
+        tray_support.set_tray_recording_indicator(
+            state.get("tray_icon"),
+            bool(state.get("started")),
+        )
+
     def stop_and_save_gui():
         rec = state.get("recorder")
         if not rec or not state["started"]:
@@ -752,6 +760,7 @@ def gui_main():
         state["started"] = False
         rec_btn.configure(text="Start recording")
         status_var.set("Ready")
+        sync_tray_recording_icon()
 
     def toggle_record():
         rec = state.get("recorder")
@@ -764,6 +773,7 @@ def gui_main():
             state["started"] = False
             rec_btn.configure(text="Start recording")
             status_var.set("Ready")
+            sync_tray_recording_icon()
         else:
             lang = None
             la = lang_var.get().strip()
@@ -787,6 +797,7 @@ def gui_main():
             state["started"] = True
             rec_btn.configure(text="Stop recording")
             rec.start(lang, mt)
+            sync_tray_recording_icon()
 
     def copy_clipboard():
         try:
@@ -859,6 +870,7 @@ def gui_main():
             on_open,
             on_quit,
         )
+        sync_tray_recording_icon()
 
     def handle_unmap(event):
         if event.widget != root or hiding_to_tray[0]:
@@ -911,6 +923,12 @@ def gui_main():
     ttk.Button(btn_frame, text="Save last to note", command=save_note).pack(side=tk.LEFT, padx=4)
 
     root.protocol("WM_DELETE_WINDOW", on_close)
+
+    root.update_idletasks()
+    rw, rh = root.winfo_reqwidth(), root.winfo_reqheight()
+    rx = max(0, (root.winfo_screenwidth() - rw) // 2)
+    ry = max(0, (root.winfo_screenheight() - rh) // 2)
+    root.geometry(f"+{rx}+{ry}")
 
     root.after(100, pump_queue)
 
